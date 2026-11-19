@@ -28,7 +28,8 @@ def main():
             raise ValueError("AI_MVP_QUOTE_MAX_AGE_SECONDS must be positive")
         model = from_environment(model_name=args.ollama_model)
         remote_model = remote_from_environment(enabled=args.enable_remote)
-        market = HttpMarketProvider(market_url, token=os.getenv("AI_MVP_MARKET_TOKEN")) if market_url else None
+        market = HttpMarketProvider(market_url, token=os.getenv("AI_MVP_MARKET_TOKEN"),
+                                    include_venues=os.getenv("AI_MVP_MARKET_ALL_SOURCES") == "1") if market_url else None
         trading = HttpTradingProvider(trading_url, token=os.getenv("AI_MVP_TRADING_TOKEN")) if trading_url else None
     except ValueError as error:
         parser.error(str(error))

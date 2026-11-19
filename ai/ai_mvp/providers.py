@@ -294,7 +294,8 @@ class HttpMarketProvider:
     returned candidate set.
     """
 
-    def __init__(self, base_url: str, *, token: str | None = None, timeout: float = 2.0) -> None:
+    def __init__(self, base_url: str, *, token: str | None = None, timeout: float = 2.0,
+                 include_venues: bool = False) -> None:
         invalid_url = "market base URL must be an HTTP(S) URL without credentials, query, or fragment"
         try:
             url = urlsplit(base_url)
@@ -325,6 +326,7 @@ class HttpMarketProvider:
             raise ValueError("market token must contain printable ASCII token characters")
         self._base_url = base_url.rstrip("/")
         self._timeout = timeout
+        self._include_venues = include_venues
         self._headers = {"Accept": "application/json"}
         if token is not None:
             self._headers["Authorization"] = f"Bearer {token}"
@@ -333,8 +335,10 @@ class HttpMarketProvider:
     def search(self, query: str, limit: int = 5) -> dict:
         limit = _limit(limit)
         query = _required_text(query, "query")
-        parameters = urlencode({"q": query, "limit": max(2, limit)})
-        request = Request(f"{self._base_url}/quotes?{parameters}", headers=self._headers, method="GET")
+        parameters = {"q": query, "limit": max(2, limit)}
+        if self._include_venues:
+            parameters.update(all_sources="true", limit=max(20, limit))
+        request = Request(f"{self._base_url}/quotes?{urlencode(parameters)}", headers=self._headers, method="GET")
         try:
             with self._opener.open(request, timeout=self._timeout) as response:
                 raw = response.read(_MAX_SNAPSHOT_BYTES + 1)
@@ -350,12 +354,33 @@ class HttpMarketProvider:
                 raise ValueError("quotes must be a bounded list")
             book = QuoteBook()
             book.ingest(quotes)
+            result = book.search(_pair(query) or query, limit)
+            if self._include_venues and result["status"] == "exact":
+                result["venues"] = self._venue_quotes(quotes, result["matches"][0]["symbol"])
         except (ValueError, RecursionError):
             raise MarketUnavailable("market upstream returned invalid quote data") from None
 
-        result = book.search(_pair(query) or query, limit)
         result["query"] = query
         return result
+
+    @staticmethod
+    def _venue_quotes(quotes, symbol):
+        sources = {}
+        for raw in quotes:
+            quote = _normalize_quote(raw)
+            if quote["symbol"] != symbol or raw.get("bid") is None or raw.get("ask") is None:
+                continue
+            quote["bid"] = _decimal(raw["bid"], "bid", positive=True)
+            quote["ask"] = _decimal(raw["ask"], "ask", positive=True)
+            if Decimal(quote["bid"]) > Decimal(quote["ask"]):
+                raise ValueError("market quotes must not be crossed")
+            if raw.get("timestamp_source") in ("exchange", "collected"):
+                quote["timestamp_source"] = raw["timestamp_source"]
+            source = quote["source"]
+            if source not in sources or quote["as_of"] > sources[source]["as_of"]:
+                sources[source] = {key: quote[key] for key in
+                                   ("symbol", "source", "as_of", "price", "bid", "ask", "timestamp_source") if key in quote}
+        return [sources[source] for source in sorted(sources)]
 
 
 def _account_symbol(value: object) -> str:

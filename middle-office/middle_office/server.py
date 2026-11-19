@@ -77,7 +77,10 @@ class Handler(BaseHTTPRequestHandler):
         url = urlsplit(self.path)
         path, method = unquote(url.path), self.command
         if (method, path) == ("GET", "/health"):
-            return 200, {"status": "ok", "mode": "simulation", "modules": 6, "api_version": 1}
+            feed = getattr(self.server, "public_feed", None)
+            return 200, {"status": "ok", "mode": "simulation", "modules": 6, "api_version": 1,
+                         "market_mode": "public" if self.server.office.public_sources else "simulation",
+                         "public_sources": feed.snapshot() if feed else {}}
         self._authorize(path)
         office = self.server.office
         params = parse_qs(url.query, keep_blank_values=True)
@@ -99,6 +102,8 @@ class Handler(BaseHTTPRequestHandler):
                 return 200, getattr(office, action)(user)
             if method == "PUT" and action in {"preferences", "assessment"}:
                 return 200, getattr(office, action)(user, self._body())
+            if (method, action) == ("POST", "orders/preview"):
+                return 200, office.preview_order(user, self._body())
             if action == "orders":
                 if method == "POST":
                     return 200, office.place_order(user, self._body())

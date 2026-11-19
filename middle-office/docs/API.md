@@ -91,6 +91,8 @@
 
 查询返回 `{ "quotes": [...] }`。未知查询返回空数组。AI 的查询按交易对合并来源，优先选新鲜报价，再选较新时间，最后用来源名称稳定排序。跨平台比较使用 `/api/comparison` 或 `all_sources=true`，保留各来源。
 
+公开模式返回 `market_mode: "public"` 和 `ranking_basis: "bid_ask_excluding_fees"`。`bid_size`、`ask_size` 是最优档基础币数量，`quantity_covered` 表示该档能否覆盖请求数量，`timestamp_source` 区分交易所字段和采集时间。费率为空时 `fee`、`total` 为空，`notional` 是未计费的报价金额。超过保鲜期的来源出现在 `excluded_sources`，尚无可用记录的出处出现在 `missing_sources`。
+
 ## 模拟订单
 
 ```json

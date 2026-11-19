@@ -39,11 +39,14 @@ class Assessment:
     allocation_range: dict[str, int | float] | None
     flags: tuple[str, ...]
     prohibitions: tuple[str, ...]
+    confidence: int | float | None = None
 
     def as_dict(self) -> dict[str, object]:
         result = asdict(self)
         result["flags"] = list(self.flags)
         result["prohibitions"] = list(self.prohibitions)
+        if self.confidence is None:
+            result.pop("confidence")
         return result
 
 
@@ -145,8 +148,11 @@ def _read_assessment(value: object) -> Assessment:
             raise ProfileValidationError("allocation_range.min_pct must not exceed max_pct")
         allocation = {"min_pct": minimum, "max_pct": maximum}
 
+    confidence = value.get("confidence")
+    if confidence is not None and (type(confidence) not in (int, float) or not 0 <= confidence <= 1):
+        raise ProfileValidationError("assessment.confidence must be between 0 and 1")
     return Assessment(scores, rai, cast(RiskLevel, risk_level), product_cap, allocation,
-                      _read_codes(value, "flags"), _read_codes(value, "prohibitions"))
+                      _read_codes(value, "flags"), _read_codes(value, "prohibitions"), confidence)
 
 
 def normalize_profile(user_id: str, questionnaire: Mapping[str, object]) -> Profile:
@@ -162,7 +168,14 @@ def normalize_profile(user_id: str, questionnaire: Mapping[str, object]) -> Prof
 
     if "assessment" in questionnaire:
         assessment = _read_assessment(questionnaire["assessment"])
-        needs_education = assessment.dimensions["KE"] < EDUCATION_KE_THRESHOLD
+        if "LEVERAGE_USE" in assessment.flags:
+            route, reason = "clarify", "review_leverage_use"
+        elif assessment.confidence is not None and assessment.confidence < 0.7:
+            route, reason = "clarify", "review_assessment_confidence"
+        elif assessment.dimensions["KE"] < EDUCATION_KE_THRESHOLD:
+            route, reason = "education", "education_for_low_ke"
+        else:
+            route, reason = "advisory", "ke_allows_advisory"
         return Profile(
             user_id=user_id,
             risk_willingness=None,
@@ -170,8 +183,8 @@ def normalize_profile(user_id: str, questionnaire: Mapping[str, object]) -> Prof
             wealth_band=_read_level(dimensions, "wealth_band"),
             knowledge_level=None,
             risk_ceiling=assessment.risk_level,
-            route="education" if needs_education else "advisory",
-            reasons=("assessment_risk_level_verified", "education_for_low_ke" if needs_education else "ke_allows_advisory"),
+            route=route,
+            reasons=("assessment_risk_level_verified", reason),
             missing_fields=(),
             questionnaire_version=_read_metadata(questionnaire, "questionnaire_version", "1.0.0"),
             source=_read_metadata(questionnaire, "source", "questionnaire"),

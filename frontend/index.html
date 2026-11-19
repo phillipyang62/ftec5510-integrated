@@ -25,6 +25,22 @@
     }
   </style>
   <script defer src="./lucide.min.js"></script>
+  <script defer src="./integration.js"></script>
+  <script defer src="./questionnaire.js"></script>
+  <style>
+    #digital-asset-ui [data-screen-target="questionnaire"][hidden] { display: none; }
+    body[data-integrated] [hidden] { display: none !important; }
+    body[data-integrated] .da-dashboard-grid,
+    body[data-integrated] .da-chat-layout { grid-template-columns: minmax(0, 1fr); }
+    body[data-integrated] .da-bubble { white-space: pre-wrap; overflow-wrap: anywhere; }
+    body[data-integrated] .da-integration-notice { padding: 12px 16px; margin: 0; }
+    .da-question-panel { padding: 20px; max-width: 820px; }
+    .da-question-panel fieldset { border: 0; padding: 0; margin: 20px 0; }
+    .da-question-panel legend { margin-bottom: 8px; font-weight: 650; }
+    .da-question-panel label { display: flex; gap: 8px; align-items: start; margin: 8px 0; }
+    .da-question-panel .da-question-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
+    .da-question-panel .da-question-status { min-height: 1.4em; }
+  </style>
 </head>
 <body>
 <div id="digital-asset-ui" class="da-app" aria-label="多平台数字资产投资台 UI 原型">
@@ -70,6 +86,10 @@
           <i data-lucide="wallet" aria-hidden="true"></i>
           <span>账户统计</span>
         </button>
+        <button class="da-navitem" type="button" data-screen-target="questionnaire" hidden>
+          <i data-lucide="clipboard-list" aria-hidden="true"></i>
+          <span>风险问卷</span>
+        </button>
       </nav>
       <div class="da-railsummary">
         <span>可用余额</span>
@@ -79,6 +99,15 @@
     </aside>
 
     <main class="da-main">
+      <section class="da-screen" id="screen-questionnaire" aria-labelledby="questionnaire-title" hidden>
+        <div class="da-pagehead">
+          <div><h1 id="questionnaire-title">风险问卷</h1></div>
+        </div>
+        <article class="da-panel da-question-panel">
+          <p id="questionnaire-status" class="da-question-status" role="status"></p>
+          <div id="questionnaire-body"></div>
+        </article>
+      </section>
       <section class="da-screen" id="screen-compare" aria-labelledby="compare-title">
         <div class="da-pagehead">
           <div>
@@ -343,9 +372,9 @@
               <label class="da-field">
                 <span>订单类型</span>
                 <div class="da-selectwrap">
-                  <select>
-                    <option>限价单</option>
-                    <option>市价单</option>
+                  <select id="order-type">
+                    <option value="limit">限价单</option>
+                    <option value="market">市价单</option>
                   </select>
                   <i data-lucide="chevron-down" aria-hidden="true"></i>
                 </div>
@@ -363,7 +392,7 @@
               <label class="da-field">
                 <span>限价</span>
                 <div class="da-inputwrap">
-                  <input type="text" value="68,420.10" inputmode="decimal">
+                  <input id="order-limit" type="text" value="68,420.10" inputmode="decimal">
                   <b>US$</b>
                 </div>
               </label>
@@ -2887,6 +2916,7 @@
 
     languageToggle?.addEventListener("click", () => {
       applyLanguage(currentLanguage === "zh" ? "en" : "zh");
+      document.dispatchEvent(new Event("harbor-language"));
     });
 
     const navButtons = Array.from(root.querySelectorAll("[data-screen-target]"));
@@ -2928,6 +2958,7 @@
     });
 
     const amount = root.querySelector("#order-amount");
+    const integrated = document.body.dataset.integrated === "true";
     const notional = root.querySelector("#order-notional");
     const fee = root.querySelector("#order-fee");
     const total = root.querySelector("#order-total");
@@ -2941,6 +2972,7 @@
     }
 
     function updateOrder() {
+      if (integrated) return;
       const quantity = Math.max(0, Number(amount?.value || 0));
       const base = quantity * price;
       const feeValue = base * 0.002;
@@ -2970,6 +3002,7 @@
 
     root.querySelector("#assistant-form")?.addEventListener("submit", (event) => {
       event.preventDefault();
+      if (integrated) return;
       if (!assistantInput || !assistantInput.value.trim()) return;
       assistantInput.value = "";
       assistantInput.dataset.dynamicPlaceholder = "recorded";
@@ -2977,6 +3010,7 @@
     });
 
     root.querySelector("#submit-order")?.addEventListener("click", (event) => {
+      if (integrated) return;
       const button = event.currentTarget;
       button.dataset.i18nSource = "已进入订单确认 · 原型演示";
       button.textContent = translateText(button.dataset.i18nSource);

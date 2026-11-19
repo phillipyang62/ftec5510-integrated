@@ -83,6 +83,10 @@ def validate_chat(payload):
     return message.strip(), history, [query.strip() for query in queries], include_account, include_simulation
 
 
+def is_demo_quote(source):
+    return source == "demo" or source.startswith("demo:")
+
+
 def mentions_account(message):
     return any(term in message.casefold() for term in ACCOUNT_TERMS)
 
@@ -90,13 +94,16 @@ def mentions_account(message):
 def market_result(provider, query, max_age, limit=5):
     result = provider.search(query, limit=limit)
     now = datetime.now(timezone.utc)
-    matches = []
-    for quote in result["matches"]:
+
+    def mark_freshness(quote):
         timestamp = datetime.fromisoformat(quote["as_of"].replace("Z", "+00:00"))
         age = (now - timestamp).total_seconds()
         freshness = "future" if age < -QUOTE_CLOCK_SKEW_SECONDS else "stale" if age > max_age else "fresh"
-        matches.append({**quote, "freshness": freshness, "age_seconds": round(age, 1)})
-    return {**result, "matches": matches}
+        return {**quote, "freshness": freshness, "age_seconds": round(age, 1)}
+
+    if "venues" in result:
+        result["venues"] = [mark_freshness(quote) for quote in result["venues"]]
+    return {**result, "matches": [mark_freshness(quote) for quote in result["matches"]]}
 
 
 class Assistant:
@@ -139,7 +146,7 @@ class Assistant:
         }
         mode = profile.route if profile else "clarify"
         profile_data["route"] = mode
-        profile_data["missing_required"] = [field for field in DIMENSION_LABELS if mode == "clarify" and profile_data[field] is None]
+        profile_data["missing_required"] = [field for field in DIMENSION_LABELS if assessment is None and mode == "clarify" and profile_data[field] is None]
         if assessment is not None:
             profile_data["assessment"] = assessment.as_dict()
         lower = message.casefold()
@@ -165,7 +172,7 @@ class Assistant:
                 if quote["freshness"] == "fresh":
                     fresh_quotes[quote["symbol"]] = {
                         **{key: quote[key] for key in ("symbol", "price", "as_of")},
-                        "demo": quote["source"] == "demo",
+                        "demo": is_demo_quote(quote["source"]),
                     }
         lesson = next((text for terms, text in KNOWLEDGE if any(term in lower for term in terms)), None)
         account_context = None
@@ -186,7 +193,9 @@ class Assistant:
         }
         explanation = self._fallback(profile_data, lesson, market_requested, account is not None)
         generation = "template"
-        if simulation is not None:
+        if mode == "clarify" and assessment is not None:
+            generation = "rule_based"
+        elif simulation is not None:
             explanation = self._explain_simulation(simulation)
             generation = "rule_based"
         else:
@@ -254,6 +263,10 @@ class Assistant:
     def _fallback(profile, lesson, market_requested, account_requested):
         mode = profile["route"]
         if mode == "clarify":
+            if "LEVERAGE_USE" in profile.get("assessment", {}).get("flags", []):
+                return "测评标记了杠杆使用。你目前是否仍用借款投资，现有头寸是否需要在近期偿还？"
+            if profile.get("assessment"):
+                return "这份测评需要复核。你可接受多大的亏损？这与问卷里选择的风险偏好一致吗？"
             missing = "、".join(DIMENSION_LABELS[field] for field in profile["missing_required"])
             return f"可以先查看基础信息。要按你的情况讨论风险，请补充问卷中的{missing}。"
         if lesson and mode == "education":
@@ -297,8 +310,16 @@ class Assistant:
                 continue
             seen.add(symbol)
             if quote["freshness"] == "fresh":
-                label = "模拟报价" if quote["source"] == "demo" else "行情快照"
-                facts.append(f"{label} · {symbol} {quote['price']} · {quote['as_of']} · 来源 {quote['source']}。")
+                label = "模拟报价" if is_demo_quote(quote["source"]) else "行情快照"
+                venues = [row for row in result.get("venues", []) if row["freshness"] == "fresh"]
+                is_collected = any(row["source"] == quote["source"] and row.get("timestamp_source") == "collected" for row in venues)
+                time_label = "采集 " if is_collected else ""
+                facts.append(f"{label} · {symbol} {quote['price']} · {time_label}{quote['as_of']} · 来源 {quote['source']}。")
+                if len(venues) >= 2:
+                    costs = [f"{row['source']} 买入 {row['ask']} / 卖出 {row['bid']} · "
+                             f"{'采集 ' if row.get('timestamp_source') == 'collected' else ''}{row['as_of']}"
+                             for row in venues[:10]]
+                    facts.append(f"{symbol} 多来源买卖报价（未计交易费）\n" + "\n".join(costs))
             else:
                 reason = "时间戳异常" if quote["freshness"] == "future" else "报价已过期"
                 facts.append(f"{symbol} 的{reason}，当前没有可用的新鲜报价。")
@@ -309,6 +330,11 @@ class Assistant:
             if account["positions"]:
                 positions = "、".join(f"{row['symbol']} {row['quantity']}" for row in account["positions"][:5])
                 facts.append(f"持仓摘要 · {positions}。")
+            if account["open_orders"]:
+                directions = {"buy": "买入", "sell": "卖出"}
+                orders = "、".join(f"{row['symbol']} {directions[row['side']]} {row['quantity']}"
+                                 for row in account["open_orders"][:5])
+                facts.append(f"挂单摘要 · {orders}。")
         elif account:
             facts.append("当前无法读取账户快照，持仓和挂单状态未知。")
         return facts

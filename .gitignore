@@ -10,3 +10,4 @@
 *.db-*
 .venv/
 node_modules/
+*.log
