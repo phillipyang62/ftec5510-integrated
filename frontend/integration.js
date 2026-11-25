@@ -142,16 +142,17 @@
   });
 
   hide("#screen-compare .da-kpis, .da-route-panel, .da-crossasset, " +
-    ".da-segmented, .da-quote-panel .da-textbtn, .da-quote-panel .da-footnote, " +
+    ".da-segmented, .da-chips, .da-quote-pair, .da-quote-panel .da-textbtn, .da-quote-panel .da-footnote, " +
     "#screen-compare .da-headactions .da-primary, #screen-trade .da-headactions, .da-watchlist .da-iconbtn, " +
-    ".da-watchlist-head, .da-watchfoot, .da-watchrow > :not(.da-asset), .da-quickamounts, " +
     ".da-order-summary > div:nth-child(3), .da-context-panel, #screen-account .da-headactions, " +
     ".da-account-grid, .da-screen .da-pagehead p, " +
     ".da-order-note, .da-order .da-panelhead p, .da-precheck strong, .da-chat-disclaimer");
   bilingual(one(".da-status"), "模拟账户", "Simulation account");
+  bilingual(one("#compare-title"), "资产组 NBBO 比价", "Asset-group NBBO");
+  bilingual(one(".da-quote-panel h2"), "资产组 NBBO 盘口", "Asset-group NBBO books");
   bilingual(one("#trade-title"), "模拟下单", "Simulated order");
   bilingual(one('[data-screen-target="trade"] span'), "模拟下单", "Simulated order");
-  bilingual(one(".da-watchlist h2"), "选择币种", "Choose an asset");
+  bilingual(one(".da-watchlist h2"), "自选行情", "Watchlist");
   hide(".da-watchlist .da-panelhead p");
   bilingual(one(".da-edu-badge"), "课堂投教", "Classroom education");
   one(".da-railsummary button").addEventListener("click", () => navigate("account"));
@@ -165,7 +166,7 @@
   let side = "buy";
   let marketVersion = 0;
   let marketTimer;
-  let marketRefreshMs;
+  let marketRefreshMs = null;
   const amount = one("#order-amount");
   const kind = one("#order-type");
   const limit = one("#order-limit");
@@ -175,7 +176,6 @@
   const publicAsset = one("#public-asset");
   const publicPairFilter = one("#public-pair-filter");
   const publicPair = one("#public-pair");
-  const allQuoteCurrencies = "all";
   const spotAssets = new Map();
   bilingual(publicAssetFilter.querySelector("span"), "币种", "Asset");
   bilingual(publicPairFilter.querySelector("span"), "计价币", "Quote currency");
@@ -187,6 +187,11 @@
   orderStatus.setAttribute("role", "status");
   const orderRisk = one("#order-risk-notice");
   const marketColumns = all(".da-quote-panel th");
+  const chartPair = one("#trade-chart-pair");
+  const chartPrice = one("#trade-chart-price");
+  const chartSource = one("#trade-chart-source");
+  const orderbookPrice = one("#orderbook-price");
+  const marketGroups = one("#market-groups");
   bilingual(marketColumns[1], "买入价（Ask）", "Ask");
   bilingual(marketColumns[2], "卖出价（Bid）", "Bid");
   bilingual(marketColumns[4], "报价时间（UTC）", "Quote time (UTC)");
@@ -249,10 +254,6 @@
     venue.replaceChildren(automatic);
     for (const quote of quotes) {
       const option = node("option", quote.source);
-      if (quote.source.startsWith("demo:MDGateway:")) {
-        const name = venueName(quote.source);
-        bilingual(option, `${name}（模拟）`, `${name} (simulated)`);
-      }
       option.value = quote.source;
       venue.append(option);
     }
@@ -266,27 +267,24 @@
     venue.value = selected;
   }
 
-  function venueName(source) {
-    return source.replace(/^demo:MDGateway:/, "");
-  }
-
   function refreshQuoteCurrencies() {
     const choices = spotAssets.get(publicAsset.value);
-    const keepAll = publicPair.value === allQuoteCurrencies;
-    const allCurrencies = new Option("", allQuoteCurrencies);
-    bilingual(allCurrencies, "所有", "All");
-    publicPair.replaceChildren(allCurrencies, ...choices.map(({ symbol, currency }) => new Option(currency, symbol)));
+    publicPair.replaceChildren(...choices.map(({ symbol, currency }) => new Option(currency, symbol)));
     const preferred = choices.find(({ currency, sources }) =>
-      currency === "USD" && ["HashKey", "OSL"].every((name) => sources.map(venueName).includes(name)))
+      currency === "USD" && sources.includes("HashKey") && sources.includes("OSL"))
       ?? choices.find(({ currency, sources }) => currency === "USDT" && sources.length >= 2)
       ?? choices.find(({ sources }) => sources.length >= 2)
       ?? choices[0];
-    publicPair.value = keepAll ? allQuoteCurrencies : preferred.symbol;
+    publicPair.value = preferred.symbol;
   }
 
   async function initializeMarket() {
     try {
       const catalog = await request("/api/market/catalog");
+      groupRefreshMs = Object.values(catalog.pairs).some((sources) =>
+        sources.some((source) => String(source).startsWith("demo:MDGateway:")))
+        ? 2000
+        : 10000;
       for (const [symbol, sources] of Object.entries(catalog.pairs)) {
         const [asset, currency] = symbol.split("/");
         if (!spotAssets.has(asset)) spotAssets.set(asset, []);
@@ -297,13 +295,19 @@
         publicAsset.replaceChildren(...tickers.map((ticker) => new Option(ticker, ticker)));
         if (spotAssets.has("BTC")) publicAsset.value = "BTC";
         refreshQuoteCurrencies();
-        publicAssetFilter.hidden = publicPairFilter.hidden = false;
+        publicAssetFilter.hidden = publicPairFilter.hidden = true;
         assets[0].parentElement.hidden = true;
       }
     } catch {
       // A missing catalog leaves the existing trade pairs available.
     }
     choosePair(0);
+    loadAssetGroups();
+    if (!groupTimer) {
+      groupTimer = setInterval(() => {
+        if (!document.hidden) loadAssetGroups();
+      }, groupRefreshMs);
+    }
   }
 
   function venueQuotes(symbol) {
@@ -311,64 +315,238 @@
     return request(`/api/market/venues?${query}`);
   }
 
-  function renderQuoteRows(result) {
-    const { symbol, venues, market_mode: mode, quote_mode: quoteMode, ranking_basis: ranking } = result;
-    const publicMarket = mode === "public";
-    for (const quote of venues) {
-      let action = "—";
-      if (pairs.includes(symbol)) {
-        action = node("button", "", "da-rowbtn");
-        action.type = "button";
-        bilingual(action, "选择", "Select");
-        action.addEventListener("click", () => { choosePair(pairs.indexOf(symbol), quote.source); navigate("trade"); });
-      }
-      const timestamp = node("span", time(quote.as_of));
-      if (quote.timestamp_source === "collected") bilingual(timestamp, `${time(quote.as_of)} · 采集`, `${time(quote.as_of)} · collected`);
-      const venueLabel = node("span", venueName(quote.source));
-      if (publicMarket) {
-        const last = node("small");
-        const price = money(quote.price, quote.quote_currency);
-        if (quoteMode === "simulation") bilingual(last, `模拟最新价 ${price}`, `Last simulated price ${price}`);
-        else bilingual(last, `最新成交 ${price}`, `Last trade ${price}`);
-        venueLabel.append(document.createElement("br"), last);
-      }
-      const fee = quote.fee_rate === null ? "—" : `${(Number(quote.fee_rate) * 100).toPrecision(3)}%`;
-      let notional = money(ranking === "bid_ask_excluding_fees" ? quote.notional : quote.total, quote.quote_currency);
-      if (quote.quantity_covered === false) {
-        notional = node("span");
-        bilingual(notional, "卖一档数量不足", "Insufficient at best ask");
-      }
-      tableRow(marketBody, [venueLabel, money(quote.ask, quote.quote_currency), money(quote.bid, quote.quote_currency),
-        publicMarket ? money(quote.ask_size, symbol.split("/")[0]) : fee, timestamp, notional, action]);
-    }
+  const FX_PER_USD = Object.freeze({ USD: 1, USDT: 1, HKD: 7.8 });
+  const ASSET_GROUPS = Object.freeze([
+    { asset: "BTC", name: "Bitcoin" },
+    { asset: "ETH", name: "Ethereum" },
+    { asset: "SOL", name: "Solana" },
+  ]);
+  let groupVersion = 0;
+  let groupTimer = null;
+  let groupRefreshMs = 10000;
+
+  function numeric(value) {
+    const result = Number(value);
+    return Number.isFinite(result) ? result : null;
   }
 
-  function renderQuoteGroup(symbol, outcome) {
-    const row = node("tr", undefined, "da-quote-group");
-    const heading = node("th", symbol);
-    heading.colSpan = marketColumns.length;
-    const labels = outcome.status === "rejected" ? ["报价暂不可用", "Quotes unavailable"]
-      : !outcome.value.venues.length ? ["暂无有效报价", "No current quotes"]
-      : outcome.value.status !== "ok" ? ["当前可比报价不足两家", "Fewer than two current quotes"] : null;
-    if (labels) {
-      const status = node("span");
-      bilingual(status, ...labels);
-      heading.append(" · ", status);
+  function usdEquivalent(value, currency) {
+    const amount = numeric(value);
+    const rate = FX_PER_USD[currency];
+    return amount == null || !rate ? null : amount / rate;
+  }
+
+  function formatGroupPrice(value, currency = "USD") {
+    const amount = numeric(value);
+    if (amount == null) return "—";
+    return new Intl.NumberFormat("en-US", {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    }).format(amount) + ` ${currency}`;
+  }
+
+  function venueName(source) {
+    return String(source || "Unknown")
+      .replace(/^demo:MDGateway:/i, "")
+      .replace(/^demo:/i, "");
+  }
+
+  function groupContracts(asset) {
+    return (spotAssets.get(asset) || []).map((entry) => entry.symbol);
+  }
+
+  async function loadAssetGroup(asset) {
+    const symbols = groupContracts(asset);
+    const results = await Promise.all(symbols.map((symbol) =>
+      venueQuotes(symbol).catch(() => ({ venues: [], symbol }))
+    ));
+    const rows = [];
+    for (const result of results) {
+      for (const quote of result.venues || []) {
+        const currency = quote.quote_currency || quote.symbol.split("/")[1];
+        const bid = numeric(quote.bid);
+        const ask = numeric(quote.ask);
+        const bidUsd = usdEquivalent(quote.bid, currency);
+        const askUsd = usdEquivalent(quote.ask, currency);
+        if (bid == null || ask == null || bidUsd == null || askUsd == null) continue;
+        rows.push({
+          source: venueName(quote.source),
+          sourceRaw: quote.source,
+          contract: quote.symbol,
+          currency,
+          bid,
+          ask,
+          bidUsd,
+          askUsd,
+          asOf: quote.as_of,
+        });
+      }
     }
-    row.append(heading);
-    marketBody.append(row);
-    if (outcome.status === "fulfilled") renderQuoteRows(outcome.value);
+    let bestAsk = null;
+    let bestBid = null;
+    for (const row of rows) {
+      if (!bestAsk || row.askUsd < bestAsk.askUsd - 1e-8) bestAsk = row;
+      if (!bestBid || row.bidUsd > bestBid.bidUsd + 1e-8) bestBid = row;
+    }
+    for (const row of rows) {
+      row.bestAsk = row === bestAsk;
+      row.bestBid = row === bestBid;
+    }
+    return {
+      rows,
+      bestAsk,
+      bestBid,
+      sourceCount: new Set(rows.map((row) => row.sourceRaw)).size,
+      simulated: rows.some((row) => /^demo:MDGateway:/i.test(row.sourceRaw)),
+    };
+  }
+
+  function addGroupHeader(group, definition, data) {
+    const head = node("div", undefined, "da-market-group-head");
+    const title = node("div", undefined, "da-group-title");
+    const badge = node("b", definition.asset.slice(0, 1), "da-group-symbol");
+    const copy = node("div");
+    const heading = node("h3", `${definition.asset} 资产组`);
+    bilingual(heading, `${definition.asset} 资产组`, `${definition.asset} asset group`);
+    const details = node("p");
+    const contractCount = data.rows.length;
+    const feedName = data.simulated ? "MDGateway simulator" : "Public spot feed";
+    bilingual(details,
+      `${definition.name} · ${data.sourceCount} 家交易所 × ${contractCount} 个合约 · ${feedName}`,
+      `${definition.name} · ${data.sourceCount} venues × ${contractCount} contracts · ${feedName}`);
+    details.dataset.contractCount = String(contractCount);
+    copy.append(heading, details);
+    title.append(badge, copy);
+
+    const stats = node("div", undefined, "da-group-stats");
+    const askStat = node("div", undefined, "da-group-stat is-ask");
+    const askLabel = node("small", "最佳 Ask（买入）");
+    bilingual(askLabel, "最佳 Ask（买入）", "Best ask (buy)");
+    const askValue = node("strong", data.bestAsk
+      ? `${formatGroupPrice(data.bestAsk.askUsd, "USD")} · ${data.bestAsk.source} · ${data.bestAsk.contract}`
+      : "—");
+    askStat.append(askLabel, askValue);
+    const bidStat = node("div", undefined, "da-group-stat is-bid");
+    const bidLabel = node("small", "最佳 Bid（卖出）");
+    bilingual(bidLabel, "最佳 Bid（卖出）", "Best bid (sell)");
+    const bidValue = node("strong", data.bestBid
+      ? `${formatGroupPrice(data.bestBid.bidUsd, "USD")} · ${data.bestBid.source} · ${data.bestBid.contract}`
+      : "—");
+    bidStat.append(bidLabel, bidValue);
+    const spreadValue = data.bestAsk && data.bestBid
+      ? (data.bestAsk.askUsd - data.bestBid.bidUsd) / ((data.bestAsk.askUsd + data.bestBid.bidUsd) / 2) * 10000
+      : null;
+    const spreadStat = node("div", undefined, "da-group-stat");
+    const spreadLabel = node("small", "NBBO 价差");
+    bilingual(spreadLabel, "NBBO 价差", "NBBO spread");
+    const normalizedSpread = spreadValue != null && Math.abs(spreadValue) < 0.005 ? 0 : spreadValue;
+    spreadStat.append(spreadLabel, node("strong", normalizedSpread == null ? "—" : `${normalizedSpread.toFixed(2)} bps`));
+    stats.append(askStat, bidStat, spreadStat);
+    head.append(title, stats);
+    group.append(head);
+  }
+
+  function addGroupTable(group, data) {
+    const wrap = node("div", undefined, "da-group-tablewrap");
+    const table = node("table", undefined, "da-group-table");
+    const thead = node("thead");
+    const headerRow = node("tr");
+    const headings = [
+      ["交易所", "Venue"],
+      ["合约", "Contract"],
+      ["最佳 Ask（买入）", "Best ask (buy)"],
+      ["最佳 Bid（卖出）", "Best bid (sell)"],
+      ["USD 等值", "USD equivalent"],
+      ["更新时间（UTC）", "Updated (UTC)"],
+    ];
+    for (const [zh, en] of headings) {
+      const cell = node("th");
+      bilingual(cell, zh, en);
+      headerRow.append(cell);
+    }
+    thead.append(headerRow);
+
+    const tbody = node("tbody");
+    for (const row of data.rows) {
+      const tr = node("tr");
+      const venue = node("td");
+      const venueWrap = node("span", undefined, "da-group-venue");
+      venueWrap.append(
+        node("i", row.source.slice(0, 1)),
+        document.createTextNode(row.source),
+      );
+      venue.append(venueWrap);
+      const contract = node("td");
+      const contractTag = node("span", row.contract, "da-contract");
+      contract.append(contractTag);
+      const ask = node("td");
+      ask.append(
+        node("span", formatGroupPrice(row.ask, row.currency)),
+        node("small", `USD 等值 ${formatGroupPrice(row.askUsd, "USD")}`, "da-normalized"),
+      );
+      if (row.bestAsk) {
+        ask.classList.add("is-nbbo-ask");
+        ask.append(node("span", "NBBO", "da-nbbo-pill"));
+      }
+      const bid = node("td");
+      bid.append(
+        node("span", formatGroupPrice(row.bid, row.currency)),
+        node("small", `USD 等值 ${formatGroupPrice(row.bidUsd, "USD")}`, "da-normalized"),
+      );
+      if (row.bestBid) {
+        bid.classList.add("is-nbbo-bid");
+        bid.append(node("span", "NBBO", "da-nbbo-pill"));
+      }
+      const mid = node("td");
+      mid.append(
+        node("span", formatGroupPrice((row.askUsd + row.bidUsd) / 2, "USD")),
+        node("small", `原价 ${formatGroupPrice((row.ask + row.bid) / 2, row.currency)}`, "da-normalized"),
+      );
+      const timestamp = node("td", time(row.asOf));
+      timestamp.className = "da-group-time";
+      tr.append(venue, contract, ask, bid, mid, timestamp);
+      tbody.append(tr);
+    }
+    table.append(thead, tbody);
+    wrap.append(table);
+    group.append(wrap);
+  }
+
+  function renderAssetGroup(definition, data) {
+    const group = node("section", undefined, "da-market-group");
+    group.dataset.asset = definition.asset;
+    addGroupHeader(group, definition, data);
+    if (data.rows.length) addGroupTable(group, data);
+    else {
+      const empty = node("div", undefined, "da-group-loading");
+      bilingual(empty, "该资产组暂无可用盘口。", "No quotes are available for this asset group.");
+      group.append(empty);
+    }
+    return group;
+  }
+
+  async function loadAssetGroups() {
+    const version = ++groupVersion;
+    bilingual(one(".da-fresh"), "正在刷新资产组…", "Refreshing asset groups…");
+    const groups = await Promise.all(ASSET_GROUPS.map(async (definition) => ({
+      definition,
+      data: await loadAssetGroup(definition.asset),
+    })));
+    if (version !== groupVersion) return;
+    marketGroups.replaceChildren(...groups.map(({ definition, data }) => renderAssetGroup(definition, data)));
+    const timestamps = groups.flatMap(({ data }) => data.rows.map((row) => row.asOf).filter(Boolean));
+    const latest = timestamps.sort().at(-1);
+    bilingual(one(".da-fresh"), `资产组 NBBO · ${time(latest) || "—"}`,
+      `Asset NBBO · ${time(latest) || "—"}`);
   }
 
   async function loadMarket(selectedVenue = "", background = false) {
     const version = ++marketVersion;
-    const showAll = publicPair.value === allQuoteCurrencies;
-    const symbols = showAll ? spotAssets.get(publicAsset.value).map(({ symbol }) => symbol) : [publicPair.value || pair];
+    const symbol = publicPair.value || pair;
     const orderPair = pair;
-    const compareTitle = one(".da-quote-panel h2");
-    if (showAll) bilingual(compareTitle, `${publicAsset.value} · 所有计价币`, `${publicAsset.value} · All quote currencies`);
-    else text(compareTitle, symbols[0]);
+    const canTrade = pairs.includes(symbol);
     text(one(".da-order h2"), pair);
+    text(chartPair, pair);
     text(amount.closest("label").querySelector("b"), pair.split("/")[0]);
     if (!background) {
       text(one(".da-clock"), "—");
@@ -377,17 +555,12 @@
       bilingual(marketNotice, "正在读取中台报价…", "Loading middle-office quotes…");
     }
     try {
-      const requests = new Map([...new Set([...symbols, orderPair])].map((symbol) => [symbol, venueQuotes(symbol)]));
-      const outcomes = await Promise.allSettled([...symbols, orderPair].map((symbol) => requests.get(symbol)));
+      const comparison = venueQuotes(symbol);
+      const [result, orderQuotes] = await Promise.all([comparison, symbol === orderPair ? comparison : venueQuotes(orderPair)]);
       if (version !== marketVersion) return;
-      const orderQuotes = outcomes.pop().value;
-      const results = outcomes.filter((outcome) => outcome.status === "fulfilled").map((outcome) => outcome.value);
-      if (!results.length && !showAll) throw outcomes[0].reason;
-      const result = results[0];
-      const publicMarket = showAll || result.market_mode === "public";
-      const simulatedFeed = publicMarket && result?.quote_mode === "simulation";
-      const preFee = showAll || result.ranking_basis === "bid_ask_excluding_fees";
-      const compareCaption = one(".da-quote-panel .da-panelhead p");
+      const publicMarket = result.market_mode === "public";
+      const simulatedFeed = publicMarket && result.quote_mode === "simulation";
+      const preFee = result.ranking_basis === "bid_ask_excluding_fees";
       if (publicMarket) {
         const refreshMs = simulatedFeed ? 2000 : 10000;
         if (marketRefreshMs !== refreshMs) {
@@ -398,41 +571,52 @@
           }, refreshMs);
         }
         bilingual(marketColumns[3], "卖一挂单数量", "Best ask size");
-        if (showAll) {
-          bilingual(compareCaption, "按计价币分组，只比较同一组内的报价。", "Quotes are grouped and compared only within each quote currency.");
-        } else if (simulatedFeed) {
-          bilingual(compareCaption, "组内模拟器生成的买卖报价，不是交易所实时行情。", "Simulated bid and ask from the team’s generator, not live exchange quotes.");
-        } else if (pairs.includes(result.symbol)) {
-          bilingual(compareCaption, "比较 0.01 币的现货报价，优先列出卖一档可覆盖的平台。", "Compare quotes for 0.01 units and prioritize venues with enough at the best ask.");
-        } else {
-          bilingual(compareCaption, "按相同计价币比较 0.01 币的现货报价。该交易对仅供比价。", "Compare spot quotes for 0.01 units in one currency. This pair is available for comparison.");
-        }
       } else {
         bilingual(marketColumns[3], "手续费", "Fee");
-        bilingual(compareCaption, "按买入 0.01 币的报价比较。", "Compare quotes to buy 0.01 units.");
       }
       if (preFee) bilingual(marketColumns[5], "报价金额（未计费）", "Notional (fees excluded)");
       else bilingual(marketColumns[5], "含费总额（0.01 币）", "Total with fee (0.01 units)");
-      if (!preview && !submitting) setVenues(orderQuotes?.venues ?? [], background ? venue.value : selectedVenue);
+      if (!preview && !submitting) setVenues(orderQuotes.venues, background ? venue.value : selectedVenue);
       marketBody.replaceChildren();
-      if (showAll) symbols.forEach((symbol, index) => renderQuoteGroup(symbol, outcomes[index]));
-      else renderQuoteRows(result);
-      const latest = results.flatMap(({ venues }) => venues.map((quote) => quote.as_of)).sort().at(-1);
+      for (const quote of result.venues) {
+        let action = "—";
+        if (canTrade) {
+          action = node("button", "", "da-rowbtn");
+          action.type = "button";
+          bilingual(action, "选择", "Select");
+          action.addEventListener("click", () => { choosePair(pairs.indexOf(symbol), quote.source); navigate("trade"); });
+        }
+        const timestamp = node("span", time(quote.as_of));
+        if (quote.timestamp_source === "collected") bilingual(timestamp, `${time(quote.as_of)} · 采集`, `${time(quote.as_of)} · collected`);
+        const venueLabel = node("span", quote.source);
+        if (publicMarket) {
+          const last = node("small");
+          const price = money(quote.price, quote.quote_currency);
+          bilingual(last, `最新成交 ${price}`, `Last trade ${price}`);
+          venueLabel.append(document.createElement("br"), last);
+        }
+        const fee = quote.fee_rate === null ? "—" : `${(Number(quote.fee_rate) * 100).toPrecision(3)}%`;
+        let notional = money(preFee ? quote.notional : quote.total, quote.quote_currency);
+        if (quote.quantity_covered === false) {
+          notional = node("span");
+          bilingual(notional, "卖一档数量不足", "Insufficient at best ask");
+        }
+        tableRow(marketBody, [venueLabel, money(quote.ask, quote.quote_currency), money(quote.bid, quote.quote_currency),
+          publicMarket ? money(quote.ask_size, symbol.split("/")[0]) : fee, timestamp, notional, action]);
+      }
+      const latest = result.venues.map((quote) => quote.as_of).sort().at(-1);
       text(one(".da-clock"), time(latest));
-      if (!latest) text(one(".da-fresh"), "—");
-      else if (publicMarket && !simulatedFeed) bilingual(one(".da-fresh"), `公开现货 · ${time(latest)}`, `Public spot · ${time(latest)}`);
+      if (publicMarket) bilingual(one(".da-fresh"), `公开现货 · ${time(latest)}`, `Public spot · ${time(latest)}`);
       else bilingual(one(".da-fresh"), `模拟 · ${time(latest)}`, `Simulation · ${time(latest)}`);
-      const best = orderQuotes?.venues[0];
+      const best = orderQuotes.venues[0];
       text(one(".da-quote-pill"), best ? money(best.price, best.quote_currency) : "—");
-      if (showAll) {
-        if (!latest) bilingual(marketNotice, "当前没有可用报价。", "No quotes are available.");
-        else if (simulatedFeed) bilingual(marketNotice, "模拟报价每 2 秒更新，未计交易费。", "Simulated quotes update every 2 seconds. Fees excluded.");
-        else bilingual(marketNotice, "报价未计交易费，订单仍为模拟。", "Fees excluded; simulated orders only.");
-      } else if (publicMarket) {
+      text(chartPrice, best ? money(best.price, best.quote_currency) : "—");
+      text(orderbookPrice, best ? money(best.price, best.quote_currency) : "—");
+      bilingual(chartSource, best ? `${best.source} · 示例走势` : "暂无报价", best ? `${best.source} · Sample chart` : "No quote available");
+      if (publicMarket) {
         const unavailable = [...result.excluded_sources, ...result.missing_sources];
         const details = unavailable.length ? ` · ${unavailable.join(", ")}` : "";
-        if (simulatedFeed && result.status === "ok") bilingual(marketNotice, "模拟报价每 2 秒更新，未计交易费。", "Simulated quotes update every 2 seconds. Fees excluded.");
-        else if (result.status === "ok") bilingual(marketNotice, `报价未计交易费，订单仍为模拟${details}`, `Fees excluded; simulated orders only${details}`);
+        if (result.status === "ok") bilingual(marketNotice, `报价未计交易费，订单仍为模拟${details}`, `Fees excluded; simulated orders only${details}`);
         else bilingual(marketNotice, `当前可比报价不足两家${details}`, `Fewer than two current quotes${details}`);
       } else if (result.status === "ok") bilingual(marketNotice, "模拟报价。按买卖价全量模拟成交。", "Simulated quotes. Full fills at bid or ask are assumed.");
       else bilingual(marketNotice, "有效报价不足两家。", "Fewer than two current venues are available.");
@@ -440,6 +624,9 @@
       if (version === marketVersion) {
         marketBody.replaceChildren();
         text(one(".da-quote-pill"), "—");
+        text(chartPrice, "—");
+        text(orderbookPrice, "—");
+        bilingual(chartSource, "报价读取失败", "Quote unavailable");
         text(one(".da-clock"), "—");
         text(one(".da-fresh"), "—");
         text(marketNotice, errorMessage(error));
@@ -470,10 +657,15 @@
     loadMarket(venue.value);
   });
   publicPair.addEventListener("change", () => loadMarket(venue.value));
+  all("[data-chart-range]").forEach((button) => button.addEventListener("click", () => {
+    all("[data-chart-range]").forEach((peer) => peer.classList.toggle("is-selected", peer === button));
+  }));
   one("#screen-compare .da-headactions .da-secondary").addEventListener("click", () => {
     invalidateOrder();
     loadMarket(venue.value);
+    loadAssetGroups();
   });
+  one('[data-screen-target="compare"]').addEventListener("click", loadAssetGroups);
   all("[data-side]").forEach((button) => button.addEventListener("click", () => {
     side = button.dataset.side;
     invalidateOrder();
@@ -598,6 +790,12 @@
     replyModel.hidden = true;
     input.focus();
   });
+  all("[data-assistant-prompt]").forEach((button) => button.addEventListener("click", () => {
+    input.value = document.documentElement.lang === "en"
+      ? button.dataset.promptEn
+      : button.dataset.promptZh;
+    input.focus();
+  }));
 
   function refreshModelFields() {
     const usingOllama = modelProvider.value === "ollama";

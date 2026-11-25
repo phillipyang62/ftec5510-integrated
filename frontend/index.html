@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light dark">
   <title>Harbor Invest - Digital Asset Investment Desk</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%239f6ffd'/%3E%3Cpath d='M20 16h7v12h10V16h7v32h-7V35H27v13h-7z' fill='white'/%3E%3C/svg%3E">
   <style>
     html,
     body {
@@ -244,6 +245,11 @@
             <span>计价币</span>
             <select id="public-pair"></select>
           </label>
+          <div class="da-fx-assumptions" aria-label="汇率假设">
+            <span><b>NBBO</b> 资产组内最优买卖价</span>
+            <span><b>USDT/USD</b> 1.00</span>
+            <span><b>USD/HKD</b> 7.80</span>
+          </div>
           <span class="da-fresh">实时 · 14:32:08</span>
         </div>
 
@@ -274,10 +280,16 @@
           <article class="da-panel da-quote-panel">
             <div class="da-panelhead">
               <div>
-                <h2>BTC / USDT 跨平台报价</h2>
-                <p>按买入 0.5 BTC 的可执行总成本排序</p>
+                <h2>资产组 NBBO 盘口</h2>
+                <p>按资产组汇总每一家交易所的 USD、USDT 与 HKD 合约盘口</p>
               </div>
-              <button class="da-textbtn" type="button">查看订单簿 <i data-lucide="chevron-right" aria-hidden="true"></i></button>
+              <span class="da-nbbo-legend">
+                <i class="is-ask"></i>最佳 Ask
+                <i class="is-bid"></i>最佳 Bid
+              </span>
+            </div>
+            <div class="da-market-groups" id="market-groups" aria-live="polite">
+              <div class="da-group-loading">正在生成资产组盘口…</div>
             </div>
             <div class="da-tablewrap">
               <table class="da-table">
@@ -455,6 +467,116 @@
             </div>
           </article>
 
+          <article class="da-panel da-trade-chart" aria-labelledby="trade-chart-title">
+            <div class="da-trade-chart-head">
+              <div>
+                <div class="da-chart-pairline">
+                  <h2 id="trade-chart-title"><span id="trade-chart-pair">BTC / USDT</span></h2>
+                  <strong id="trade-chart-price">68,420.10</strong>
+                  <span class="da-positive" id="trade-chart-change">+2.84%</span>
+                </div>
+                <p id="trade-chart-source">HashKey Exchange · 示例走势</p>
+              </div>
+              <div class="da-chart-range" role="group" aria-label="图表周期">
+                <button type="button" data-chart-range>1H</button>
+                <button class="is-selected" type="button" data-chart-range>4H</button>
+                <button type="button" data-chart-range>1D</button>
+                <button type="button" data-chart-range>1W</button>
+              </div>
+            </div>
+            <div class="da-chart-stats" aria-label="行情摘要">
+              <span><small>24H 涨跌</small><strong class="da-positive">+2.84%</strong></span>
+              <span><small>24H 最高</small><strong>69,214.70</strong></span>
+              <span><small>24H 最低</small><strong>66,802.30</strong></span>
+              <span><small>24H 成交额</small><strong>US$ 864.2M</strong></span>
+            </div>
+            <div class="da-market-chart-wrap">
+              <svg class="da-market-chart" viewBox="0 0 760 390" role="img" aria-label="BTC / USDT 示例 K 线走势图">
+                <title>BTC / USDT 示例 K 线走势图</title>
+                <g class="da-market-grid">
+                  <line x1="0" y1="52" x2="760" y2="52"></line>
+                  <line x1="0" y1="130" x2="760" y2="130"></line>
+                  <line x1="0" y1="208" x2="760" y2="208"></line>
+                  <line x1="0" y1="286" x2="760" y2="286"></line>
+                  <line x1="0" y1="364" x2="760" y2="364"></line>
+                </g>
+                <g class="da-candle-grid">
+                  <g class="is-up"><line x1="34" y1="226" x2="34" y2="282"></line><rect x="27" y="238" width="14" height="31" rx="1"></rect></g>
+                  <g class="is-up"><line x1="72" y1="211" x2="72" y2="269"></line><rect x="65" y="225" width="14" height="29" rx="1"></rect></g>
+                  <g class="is-down"><line x1="110" y1="207" x2="110" y2="260"></line><rect x="103" y="219" width="14" height="28" rx="1"></rect></g>
+                  <g class="is-up"><line x1="148" y1="187" x2="148" y2="243"></line><rect x="141" y="201" width="14" height="29" rx="1"></rect></g>
+                  <g class="is-up"><line x1="186" y1="174" x2="186" y2="231"></line><rect x="179" y="189" width="14" height="28" rx="1"></rect></g>
+                  <g class="is-down"><line x1="224" y1="168" x2="224" y2="224"></line><rect x="217" y="182" width="14" height="27" rx="1"></rect></g>
+                  <g class="is-up"><line x1="262" y1="146" x2="262" y2="207"></line><rect x="255" y="160" width="14" height="31" rx="1"></rect></g>
+                  <g class="is-up"><line x1="300" y1="126" x2="300" y2="190"></line><rect x="293" y="141" width="14" height="33" rx="1"></rect></g>
+                  <g class="is-down"><line x1="338" y1="132" x2="338" y2="198"></line><rect x="331" y="147" width="14" height="35" rx="1"></rect></g>
+                  <g class="is-up"><line x1="376" y1="112" x2="376" y2="173"></line><rect x="369" y="127" width="14" height="31" rx="1"></rect></g>
+                  <g class="is-down"><line x1="414" y1="105" x2="414" y2="169"></line><rect x="407" y="119" width="14" height="33" rx="1"></rect></g>
+                  <g class="is-up"><line x1="452" y1="82" x2="452" y2="145"></line><rect x="445" y="97" width="14" height="32" rx="1"></rect></g>
+                  <g class="is-up"><line x1="490" y1="68" x2="490" y2="130"></line><rect x="483" y="82" width="14" height="31" rx="1"></rect></g>
+                  <g class="is-down"><line x1="528" y1="76" x2="528" y2="141"></line><rect x="521" y="91" width="14" height="34" rx="1"></rect></g>
+                  <g class="is-up"><line x1="566" y1="54" x2="566" y2="117"></line><rect x="559" y="70" width="14" height="31" rx="1"></rect></g>
+                  <g class="is-up"><line x1="604" y1="45" x2="604" y2="106"></line><rect x="597" y="59" width="14" height="31" rx="1"></rect></g>
+                  <g class="is-down"><line x1="642" y1="51" x2="642" y2="117"></line><rect x="635" y="66" width="14" height="35" rx="1"></rect></g>
+                  <g class="is-up"><line x1="680" y1="33" x2="680" y2="94"></line><rect x="673" y="47" width="14" height="32" rx="1"></rect></g>
+                  <g class="is-up"><line x1="718" y1="26" x2="718" y2="88"></line><rect x="711" y="41" width="14" height="31" rx="1"></rect></g>
+                </g>
+                <path class="da-market-average" d="M15 258 C90 244, 120 220, 190 207 C270 191, 320 166, 390 150 C460 134, 510 95, 580 82 C650 70, 690 58, 745 43"></path>
+                <g class="da-market-labels">
+                  <text x="744" y="68">68,800</text>
+                  <text x="744" y="146">68,000</text>
+                  <text x="744" y="224">67,200</text>
+                  <text x="744" y="302">66,400</text>
+                  <text x="0" y="386">10:00</text>
+                  <text x="248" y="386">12:00</text>
+                  <text x="500" y="386">14:00</text>
+                  <text x="690" y="386">16:00</text>
+                </g>
+              </svg>
+            </div>
+            <div class="da-chart-footer">
+              <span><i class="da-legend-dot da-legend-brand"></i>价格</span>
+              <span><i class="da-legend-line"></i>VWAP</span>
+              <small>示例图表 · 成交与账户均为模拟</small>
+            </div>
+          </article>
+
+          <article class="da-panel da-orderbook" aria-labelledby="orderbook-title">
+            <div class="da-panelhead">
+              <div>
+                <h2 id="orderbook-title">订单簿</h2>
+                <p>示例盘口 · 0.01 BTC</p>
+              </div>
+              <button class="da-iconbtn da-iconbtn-light" type="button" aria-label="切换订单簿显示"><i data-lucide="list-filter" aria-hidden="true"></i></button>
+            </div>
+            <div class="da-orderbook-head" aria-hidden="true">
+              <span>价格（USDT）</span><span>数量（BTC）</span>
+            </div>
+            <div class="da-orderbook-side is-ask">
+              <div style="--depth: 86%"><span>68,468.80</span><strong>0.1842</strong></div>
+              <div style="--depth: 63%"><span>68,465.20</span><strong>0.0926</strong></div>
+              <div style="--depth: 72%"><span>68,462.90</span><strong>0.1348</strong></div>
+              <div style="--depth: 41%"><span>68,459.40</span><strong>0.0515</strong></div>
+              <div style="--depth: 55%"><span>68,455.10</span><strong>0.0834</strong></div>
+            </div>
+            <div class="da-orderbook-mid">
+              <strong id="orderbook-price">68,420.10</strong>
+              <span>≈ US$ 68,420.10</span>
+            </div>
+            <div class="da-orderbook-side is-bid">
+              <div style="--depth: 58%"><span>68,419.80</span><strong>0.0751</strong></div>
+              <div style="--depth: 78%"><span>68,416.30</span><strong>0.1287</strong></div>
+              <div style="--depth: 46%"><span>68,412.60</span><strong>0.0642</strong></div>
+              <div style="--depth: 90%"><span>68,408.40</span><strong>0.2016</strong></div>
+              <div style="--depth: 36%"><span>68,404.90</span><strong>0.0433</strong></div>
+            </div>
+            <div class="da-orderbook-footer">
+              <span><i class="is-ask"></i>卖盘</span>
+              <span><i class="is-bid"></i>买盘</span>
+              <small>仅作界面示意</small>
+            </div>
+          </article>
+
           <article class="da-panel da-order">
             <div class="da-panelhead">
               <div>
@@ -602,6 +724,30 @@
             </dialog>
 
             <div class="da-messages" aria-live="polite"></div>
+
+            <div class="da-chat-starters" aria-label="推荐问题">
+              <p>试试这样问</p>
+              <div>
+                <button type="button" data-assistant-prompt
+                  data-prompt-zh="比较 BTC / USDT 的跨平台报价"
+                  data-prompt-en="Compare the BTC / USDT quotes across venues">
+                  <i data-lucide="line-chart" aria-hidden="true"></i>
+                  <span>比较 BTC / USDT 的跨平台报价<small>查看价差、费用与推荐平台</small></span>
+                </button>
+                <button type="button" data-assistant-prompt
+                  data-prompt-zh="解释我的风险等级和产品上限"
+                  data-prompt-en="Explain my risk level and product cap">
+                  <i data-lucide="shield-check" aria-hidden="true"></i>
+                  <span>解释我的风险等级和产品上限<small>结合当前问卷结果说明</small></span>
+                </button>
+                <button type="button" data-assistant-prompt
+                  data-prompt-zh="我如何计算买入手续费和滑点？"
+                  data-prompt-en="How are trading fees and slippage calculated?">
+                  <i data-lucide="calculator" aria-hidden="true"></i>
+                  <span>我如何计算买入手续费和滑点？<small>了解交易成本的计算方法</small></span>
+                </button>
+              </div>
+            </div>
 
             <form class="da-composer" id="assistant-form">
               <label class="sr-only" for="assistant-input">向聊天助手提问</label>
@@ -1410,14 +1556,6 @@
 
   .da-table tr.is-best {
     background: color-mix(in srgb, var(--da-brand-soft) 64%, transparent);
-  }
-
-  .da-table .da-quote-group th {
-    border-top: 1px solid var(--da-line);
-    background: var(--da-surface-2);
-    color: var(--da-ink);
-    font-size: 11px;
-    font-weight: 600;
   }
 
   .da-venue {
@@ -2818,6 +2956,1488 @@
       margin-left: 0;
     }
   }
+
+  /* HashKey-inspired exchange workspace: light surfaces, violet navigation,
+     compact market data and a full trading-terminal layout. */
+  html,
+  body {
+    min-height: 100%;
+    background: #f6f6ff;
+  }
+
+  body {
+    padding: 0;
+  }
+
+  #digital-asset-ui {
+    color-scheme: light;
+    --da-bg: #f6f6ff;
+    --da-surface: #ffffff;
+    --da-surface-2: #fafafa;
+    --da-surface-3: #f4f4f5;
+    --da-ink: #18181b;
+    --da-muted: #70707b;
+    --da-line: #e8ebff;
+    --da-brand: #9f6ffd;
+    --da-brand-strong: #6727e4;
+    --da-brand-soft: #f0eaff;
+    --da-navy: #18181b;
+    --da-navy-2: #27272a;
+    --da-positive: #12b76a;
+    --da-negative: #f8495e;
+    --da-warning: #db8b00;
+    --da-shadow: 0 1px 2px rgba(24, 24, 27, .03);
+    min-height: 100vh;
+    overflow: visible;
+    border: 0;
+    border-radius: 0;
+    background:
+      radial-gradient(circle at 82% -20%, rgba(159, 111, 253, .16), transparent 34rem),
+      #f6f6ff;
+    box-shadow: none;
+    font-family: Inter, "Segoe UI", "Microsoft YaHei", "PingFang SC", sans-serif;
+    font-size: 13px;
+  }
+
+  .da-topbar {
+    position: sticky;
+    top: 0;
+    z-index: 50;
+    min-height: 72px;
+    padding: 0 28px;
+    gap: 24px;
+    background: rgba(255, 255, 255, .96);
+    border-bottom: 1px solid var(--da-line);
+    backdrop-filter: blur(16px);
+  }
+
+  .da-brand {
+    gap: 11px;
+  }
+
+  .da-brandmark {
+    width: 40px;
+    height: 40px;
+    border-radius: 9px;
+    background: linear-gradient(145deg, #b98cff 0%, #9f6ffd 52%, #6727e4 100%);
+    color: #ffffff;
+    box-shadow: 0 7px 18px rgba(103, 39, 228, .22);
+    font-size: 19px;
+    font-weight: 800;
+  }
+
+  .da-brand strong {
+    color: #18181b;
+    font-size: 16px;
+    font-weight: 800;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+  }
+
+  .da-brand > div:last-child > span {
+    color: #70707b;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: .06em;
+  }
+
+  .da-topmeta {
+    gap: 13px;
+  }
+
+  .da-status {
+    min-height: 34px;
+    padding: 0 12px;
+    border: 1px solid #ede8ff;
+    background: #f7f4ff;
+    color: #6727e4;
+    font-size: 11px;
+  }
+
+  .da-clock {
+    color: #70707b;
+    font-size: 11px;
+  }
+
+  .da-langtoggle,
+  .da-iconbtn {
+    min-height: 36px;
+    border: 1px solid #e8ebff;
+    border-radius: 8px;
+    background: #ffffff;
+    color: #3f3f46;
+  }
+
+  .da-langtoggle:hover,
+  .da-iconbtn:hover {
+    border-color: #c8b5f8;
+    color: #6727e4;
+    background: #faf8ff;
+  }
+
+  .da-iconbtn {
+    width: 36px;
+    height: 36px;
+  }
+
+  .da-iconbtn-light {
+    border-color: transparent;
+    background: transparent;
+  }
+
+  .da-avatar {
+    width: 36px;
+    height: 36px;
+    background: #18181b;
+    color: #ffffff;
+  }
+
+  .da-session-controls > strong {
+    max-width: 20ch;
+    padding: 7px 10px;
+    border-radius: 7px;
+    background: #f7f7f8;
+    color: #3f3f46;
+    font-size: 11px;
+  }
+
+  .da-sign-in {
+    min-height: calc(100vh - 72px);
+    padding: 48px 20px;
+    background:
+      radial-gradient(circle at 68% 28%, rgba(159, 111, 253, .18), transparent 28rem),
+      linear-gradient(180deg, #fafaff 0%, #f6f6ff 100%);
+  }
+
+  .da-sign-in .da-sign-in-card {
+    width: min(100%, 470px);
+    gap: 17px;
+    padding: 38px;
+    border: 1px solid #e8ebff;
+    border-radius: 12px;
+    background: #ffffff;
+    box-shadow: 0 28px 80px rgba(52, 33, 96, .13);
+  }
+
+  .da-sign-in-card .da-eyebrow {
+    color: #6727e4;
+    font-size: 10px;
+    letter-spacing: .15em;
+  }
+
+  .da-sign-in-card h1 {
+    font-size: 30px;
+    font-weight: 700;
+  }
+
+  .da-sign-in-card > p:not(.da-eyebrow):not(.da-login-note) {
+    color: #70707b;
+    line-height: 1.7;
+  }
+
+  .da-sign-in-card label {
+    color: #3f3f46;
+    font-size: 12px;
+  }
+
+  .da-sign-in-card input {
+    min-height: 48px;
+    border-color: #e8ebff;
+    border-radius: 8px;
+    background: #fafafa;
+    font-size: 14px;
+  }
+
+  .da-sign-in-card input:focus {
+    border-color: #9f6ffd;
+    background: #ffffff;
+    box-shadow: 0 0 0 3px rgba(159, 111, 253, .12);
+  }
+
+  #account-login-submit {
+    min-height: 48px;
+    margin-top: 9px;
+    background: #18181b;
+    color: #ffffff;
+    font-size: 13px;
+  }
+
+  .da-shell {
+    display: block;
+    min-height: 0;
+  }
+
+  .da-rail {
+    position: sticky;
+    top: 72px;
+    z-index: 40;
+    min-height: 58px;
+    height: 58px;
+    padding: 0 28px;
+    flex-direction: row;
+    align-items: stretch;
+    gap: 18px;
+    overflow-x: auto;
+    background: rgba(255, 255, 255, .96);
+    color: #18181b;
+    border-bottom: 1px solid #e8ebff;
+    backdrop-filter: blur(16px);
+    scrollbar-width: none;
+  }
+
+  .da-rail::-webkit-scrollbar {
+    display: none;
+  }
+
+  .da-navlabel {
+    display: none;
+  }
+
+  .da-nav {
+    display: flex;
+    align-items: stretch;
+    gap: 2px;
+  }
+
+  .da-navitem {
+    position: relative;
+    width: auto;
+    min-width: max-content;
+    padding: 0 18px;
+    border-radius: 0;
+    color: #70707b;
+    font-size: 12px;
+    font-weight: 600;
+  }
+
+  .da-navitem:hover {
+    background: #fafafa;
+    color: #18181b;
+  }
+
+  .da-navitem.is-active {
+    background: transparent;
+    color: #6727e4;
+    font-weight: 700;
+  }
+
+  .da-navitem.is-active::after {
+    content: "";
+    position: absolute;
+    right: 12px;
+    bottom: 0;
+    left: 12px;
+    height: 3px;
+    border-radius: 3px 3px 0 0;
+    background: #9f6ffd;
+  }
+
+  .da-railsummary {
+    min-width: max-content;
+    margin: 0 0 0 auto;
+    padding: 0;
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    gap: 10px;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    color: #18181b;
+  }
+
+  .da-railsummary span {
+    color: #70707b;
+    font-size: 10px;
+  }
+
+  .da-railsummary strong {
+    color: #18181b;
+    font-size: 12px;
+  }
+
+  .da-railsummary button {
+    margin: 0 0 0 4px;
+    color: #6727e4;
+    font-size: 11px;
+    font-weight: 600;
+  }
+
+  .da-main {
+    width: 100%;
+    padding: 22px 24px 36px;
+    background: transparent;
+  }
+
+  .da-screen {
+    max-width: 1600px;
+    margin: 0 auto;
+  }
+
+  .da-pagehead {
+    margin-bottom: 16px;
+    align-items: center;
+  }
+
+  .da-pagehead h1 {
+    font-size: 25px;
+    font-weight: 700;
+    letter-spacing: -.025em;
+  }
+
+  .da-pagehead p:not(.da-eyebrow) {
+    color: #70707b;
+    font-size: 12px;
+  }
+
+  .da-eyebrow {
+    color: #6727e4;
+    font-size: 9px;
+    font-weight: 800;
+    letter-spacing: .16em;
+  }
+
+  .da-primary,
+  .da-secondary {
+    min-height: 38px;
+    padding: 9px 14px;
+    border-radius: 7px;
+  }
+
+  .da-primary {
+    background: #18181b;
+    color: #ffffff;
+  }
+
+  .da-primary:hover {
+    background: #2c2c31;
+    filter: none;
+  }
+
+  .da-secondary {
+    border: 1px solid #e8ebff;
+    background: #ffffff;
+    color: #3f3f46;
+  }
+
+  .da-secondary:hover {
+    border-color: #bda4f7;
+    color: #6727e4;
+    background: #faf8ff;
+  }
+
+  .da-toolbar {
+    min-height: 50px;
+    margin-bottom: 12px;
+    padding: 7px 10px;
+    border: 1px solid #e8ebff;
+    border-radius: 8px;
+    background: #ffffff;
+    box-shadow: var(--da-shadow);
+  }
+
+  .da-segmented {
+    padding: 2px;
+    border-radius: 6px;
+    background: #f4f4f5;
+  }
+
+  .da-segmented button {
+    min-height: 31px;
+    padding: 6px 12px;
+    border-radius: 5px;
+    color: #70707b;
+    font-size: 11px;
+  }
+
+  .da-segmented button.is-selected {
+    background: #ffffff;
+    color: #6727e4;
+    box-shadow: 0 1px 4px rgba(24, 24, 27, .08);
+  }
+
+  .da-fx-assumptions {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 7px;
+  }
+
+  .da-fx-assumptions span {
+    min-height: 30px;
+    padding: 0 10px;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    border: 1px solid #ece8ff;
+    border-radius: 6px;
+    background: #fbfaff;
+    color: #70707b;
+    font-size: 9px;
+  }
+
+  .da-fx-assumptions b {
+    color: #6727e4;
+    font-weight: 750;
+  }
+
+  .da-chip {
+    min-height: 31px;
+    padding: 6px 11px;
+    border-radius: 6px;
+    color: #70707b;
+    font-size: 11px;
+  }
+
+  .da-chip.is-selected {
+    background: #f0eaff;
+    color: #6727e4;
+  }
+
+  .da-fresh {
+    color: #70707b;
+    font-size: 10px;
+  }
+
+  .da-fresh::before {
+    background: #12b76a;
+    box-shadow: 0 0 0 3px rgba(18, 183, 106, .12);
+  }
+
+  .da-kpis {
+    gap: 8px;
+    margin-bottom: 12px;
+  }
+
+  .da-kpi {
+    min-height: 82px;
+    padding: 14px 16px;
+    border: 1px solid #e8ebff;
+    border-radius: 8px;
+    background: #ffffff;
+    box-shadow: var(--da-shadow);
+  }
+
+  .da-kpi-featured {
+    border-color: #ddd0ff;
+    background: linear-gradient(135deg, #f7f3ff 0%, #ffffff 78%);
+  }
+
+  .da-kpi span {
+    color: #70707b;
+    font-size: 10px;
+  }
+
+  .da-kpi strong {
+    color: #18181b;
+    font-size: 18px;
+    font-weight: 700;
+  }
+
+  .da-kpi small {
+    color: #8b8b94;
+    font-size: 9px;
+  }
+
+  .da-dashboard-grid {
+    grid-template-columns: minmax(0, 1.75fr) minmax(280px, .75fr);
+    gap: 12px;
+  }
+
+  .da-panel {
+    border: 1px solid #e8ebff;
+    border-radius: 8px;
+    background: #ffffff;
+    box-shadow: var(--da-shadow);
+  }
+
+  .da-panelhead {
+    padding: 14px 16px;
+    border-bottom-color: #eef0fb;
+  }
+
+  .da-panelhead h2,
+  .da-chathead h2 {
+    color: #18181b;
+    font-size: 14px;
+    font-weight: 700;
+  }
+
+  .da-panelhead p {
+    color: #8b8b94;
+    font-size: 9px;
+  }
+
+  .da-textbtn {
+    color: #6727e4;
+    font-size: 10px;
+    font-weight: 600;
+  }
+
+  .da-table {
+    font-size: 11px;
+  }
+
+  .da-table th {
+    padding: 10px 13px;
+    background: #fafafa;
+    color: #8b8b94;
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: .02em;
+  }
+
+  .da-table td {
+    padding: 12px 13px;
+    border-top-color: #f0f0f3;
+  }
+
+  .da-table tr.is-best {
+    background: #fbf9ff;
+  }
+
+  .da-nbbo-legend {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    color: #70707b;
+    font-size: 9px;
+    white-space: nowrap;
+  }
+
+  .da-nbbo-legend i {
+    width: 7px;
+    height: 7px;
+    border-radius: 2px;
+  }
+
+  .da-nbbo-legend .is-ask {
+    background: #12b76a;
+  }
+
+  .da-nbbo-legend .is-bid {
+    background: #9f6ffd;
+  }
+
+  .da-quote-panel .da-tablewrap {
+    display: none;
+  }
+
+  .da-market-groups {
+    display: grid;
+  }
+
+  .da-group-loading {
+    padding: 36px 18px;
+    color: #8b8b94;
+    text-align: center;
+    font-size: 11px;
+  }
+
+  .da-market-group {
+    border-top: 1px solid #eef0fb;
+  }
+
+  .da-market-group:first-child {
+    border-top: 0;
+  }
+
+  .da-market-group-head {
+    padding: 14px 16px 11px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    background:
+      linear-gradient(90deg, rgba(159, 111, 253, .055), transparent 48%),
+      #ffffff;
+  }
+
+  .da-group-title {
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .da-group-symbol {
+    width: 34px;
+    height: 34px;
+    display: grid;
+    place-items: center;
+    flex: 0 0 auto;
+    border-radius: 50%;
+    background: #f0eaff;
+    color: #6727e4;
+    font-size: 11px;
+    font-weight: 800;
+  }
+
+  .da-group-title h3 {
+    margin: 0;
+    color: #18181b;
+    font-size: 14px;
+    font-weight: 750;
+  }
+
+  .da-group-title p {
+    margin-top: 2px;
+    color: #8b8b94;
+    font-size: 9px;
+  }
+
+  .da-group-stats {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
+
+  .da-group-stat {
+    min-width: 110px;
+    padding: 6px 9px;
+    display: grid;
+    gap: 2px;
+    border: 1px solid #ece8ff;
+    border-radius: 6px;
+    background: #fbfaff;
+  }
+
+  .da-group-stat.is-ask {
+    border-color: #c9f1dc;
+    background: #f3fcf7;
+  }
+
+  .da-group-stat.is-bid {
+    border-color: #ded2ff;
+    background: #f8f5ff;
+  }
+
+  .da-group-stat small {
+    color: #8b8b94;
+    font-size: 8px;
+  }
+
+  .da-group-stat strong {
+    color: #18181b;
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .da-group-tablewrap {
+    overflow-x: auto;
+  }
+
+  .da-group-table {
+    width: 100%;
+    min-width: 780px;
+    border-collapse: collapse;
+    font-size: 10px;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .da-group-table th {
+    padding: 9px 12px;
+    background: #fafafa;
+    color: #8b8b94;
+    border-top: 1px solid #f0f0f3;
+    border-bottom: 1px solid #f0f0f3;
+    text-align: left;
+    font-size: 8px;
+    font-weight: 700;
+    letter-spacing: .02em;
+    white-space: nowrap;
+  }
+
+  .da-group-table td {
+    padding: 10px 12px;
+    border-bottom: 1px solid #f3f3f5;
+    color: #3f3f46;
+    white-space: nowrap;
+  }
+
+  .da-group-table tr:hover td {
+    background: #fcfbff;
+  }
+
+  .da-group-table tr:last-child td {
+    border-bottom: 0;
+  }
+
+  .da-group-venue {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    color: #18181b;
+    font-weight: 650;
+  }
+
+  .da-group-venue i {
+    width: 23px;
+    height: 23px;
+    display: grid;
+    place-items: center;
+    border-radius: 6px;
+    background: #18181b;
+    color: #ffffff;
+    font-size: 9px;
+    font-style: normal;
+    font-weight: 750;
+  }
+
+  .da-contract {
+    padding: 3px 7px;
+    border: 1px solid #e8ebff;
+    border-radius: 5px;
+    background: #ffffff;
+    color: #52525b;
+    font-size: 9px;
+    font-weight: 650;
+  }
+
+  .da-contract small {
+    margin-left: 5px;
+    color: #9a9aa3;
+    font-size: 7px;
+    font-weight: 500;
+  }
+
+  .da-normalized {
+    display: block;
+    margin-top: 2px;
+    color: #9a9aa3;
+    font-size: 7px;
+  }
+
+  .da-group-table td.is-nbbo-ask,
+  .da-group-table td.is-nbbo-bid {
+    position: relative;
+    font-weight: 750;
+  }
+
+  .da-group-table td.is-nbbo-ask {
+    background: #eaf9f1;
+    color: #0c8a50;
+    box-shadow: inset 0 0 0 1px #bcefd4;
+  }
+
+  .da-group-table td.is-nbbo-bid {
+    background: #f3edff;
+    color: #6727e4;
+    box-shadow: inset 0 0 0 1px #d8c8ff;
+  }
+
+  .da-nbbo-pill {
+    margin-left: 5px;
+    padding: 2px 4px;
+    border-radius: 3px;
+    background: #ffffff;
+    color: inherit;
+    font-size: 7px;
+    font-weight: 800;
+    letter-spacing: .04em;
+  }
+
+  .da-group-spread {
+    color: #6727e4;
+    font-weight: 650;
+  }
+
+  .da-group-time {
+    color: #8b8b94;
+    font-size: 9px;
+  }
+
+  .da-venue b {
+    border-radius: 6px;
+    background: #18181b;
+  }
+
+  .da-mini-badge {
+    border-radius: 4px;
+    background: #9f6ffd;
+    color: #ffffff;
+  }
+
+  .da-mini-badge-neutral {
+    background: #f4f4f5;
+    color: #70707b;
+  }
+
+  .da-rowbtn {
+    min-height: 28px;
+    padding: 5px 9px;
+    border: 1px solid #e8ebff;
+    border-radius: 6px;
+    background: #ffffff;
+    color: #6727e4;
+    font-size: 9px;
+    font-weight: 600;
+  }
+
+  .da-rowbtn:hover {
+    border-color: #c8b5f8;
+    background: #f7f3ff;
+    color: #6727e4;
+  }
+
+  .da-live,
+  .da-quote-pill {
+    background: #f0eaff;
+    color: #6727e4;
+  }
+
+  .da-route-point,
+  .da-selectwrap,
+  .da-inputwrap,
+  .da-product {
+    border-color: #e8ebff;
+    border-radius: 7px;
+    background: #fafafa;
+  }
+
+  .da-route-point.is-primary {
+    background: #f7f3ff;
+  }
+
+  .da-route-line {
+    background: #9f6ffd;
+  }
+
+  .da-product.is-selected {
+    border-color: #bda4f7;
+    box-shadow: inset 0 0 0 1px #bda4f7;
+  }
+
+  .da-trade-layout {
+    grid-template-columns: 300px minmax(430px, 1fr) 294px;
+    grid-template-areas:
+      "watch chart book"
+      "watch order order";
+    align-items: start;
+    gap: 12px;
+  }
+
+  .da-watchlist {
+    grid-area: watch;
+  }
+
+  .da-trade-chart {
+    grid-area: chart;
+    overflow: hidden;
+  }
+
+  .da-orderbook {
+    grid-area: book;
+    overflow: hidden;
+  }
+
+  .da-order {
+    grid-area: order;
+    min-width: 0;
+  }
+
+  .da-watchlist-head,
+  .da-watchrow {
+    grid-template-columns: minmax(112px, 1.25fr) 84px 52px;
+    gap: 7px;
+  }
+
+  .da-watchlist-head {
+    padding: 9px 12px;
+    background: #fafafa;
+    font-weight: 700;
+  }
+
+  .da-watchlist-head span:last-child,
+  .da-watchrow .da-state-dot {
+    display: none;
+  }
+
+  .da-watchrow {
+    padding: 11px 12px;
+    border-top-color: #f0f0f3;
+    font-size: 10px;
+  }
+
+  .da-watchrow:hover,
+  .da-watchrow.is-selected {
+    background: #f7f3ff;
+  }
+
+  .da-watchrow.is-selected {
+    box-shadow: inset 2px 0 0 #9f6ffd;
+  }
+
+  .da-watchfoot {
+    justify-content: flex-end;
+    padding: 10px 12px;
+  }
+
+  .da-watchfoot > span {
+    display: none;
+  }
+
+  .da-trade-chart-head {
+    min-height: 82px;
+    padding: 15px 16px 10px;
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+  }
+
+  .da-trade-chart-head > div:first-child {
+    min-width: 0;
+  }
+
+  .da-chart-pairline {
+    display: flex;
+    align-items: baseline;
+    flex-wrap: wrap;
+    gap: 9px;
+  }
+
+  .da-chart-pairline h2 {
+    color: #18181b;
+    font-size: 17px;
+    font-weight: 750;
+  }
+
+  .da-chart-pairline > strong {
+    color: #18181b;
+    font-size: 24px;
+    font-weight: 750;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .da-chart-pairline > span {
+    font-size: 11px;
+    font-weight: 650;
+  }
+
+  .da-trade-chart-head p {
+    margin-top: 4px;
+    color: #8b8b94;
+    font-size: 9px;
+  }
+
+  .da-chart-range {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    padding: 2px;
+    border-radius: 6px;
+    background: #f4f4f5;
+  }
+
+  .da-chart-range button {
+    min-width: 32px;
+    min-height: 28px;
+    padding: 0 8px;
+    border: 0;
+    border-radius: 5px;
+    background: transparent;
+    color: #70707b;
+    font-size: 9px;
+    font-weight: 650;
+  }
+
+  .da-chart-range button.is-selected {
+    background: #ffffff;
+    color: #6727e4;
+    box-shadow: 0 1px 4px rgba(24, 24, 27, .08);
+  }
+
+  .da-chart-stats {
+    margin: 0 16px 4px;
+    padding: 8px 10px;
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 12px;
+    border-top: 1px solid #f0f0f3;
+    border-bottom: 1px solid #f0f0f3;
+  }
+
+  .da-chart-stats span {
+    min-width: 0;
+    display: grid;
+    gap: 2px;
+  }
+
+  .da-chart-stats small {
+    overflow: hidden;
+    color: #8b8b94;
+    font-size: 8px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .da-chart-stats strong {
+    overflow: hidden;
+    color: #3f3f46;
+    font-size: 10px;
+    font-variant-numeric: tabular-nums;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .da-market-chart-wrap {
+    padding: 7px 12px 0;
+  }
+
+  .da-market-chart {
+    width: 100%;
+    min-height: 252px;
+    display: block;
+    overflow: visible;
+  }
+
+  .da-market-grid line {
+    stroke: #eef0f5;
+    stroke-width: 1;
+    stroke-dasharray: 3 4;
+  }
+
+  .da-candle-grid g line {
+    stroke-width: 1;
+  }
+
+  .da-candle-grid g rect {
+    stroke-width: 1;
+  }
+
+  .da-candle-grid .is-up line,
+  .da-candle-grid .is-up rect {
+    stroke: #12b76a;
+    fill: #12b76a;
+  }
+
+  .da-candle-grid .is-down line,
+  .da-candle-grid .is-down rect {
+    stroke: #f8495e;
+    fill: #f8495e;
+  }
+
+  .da-market-average {
+    fill: none;
+    stroke: #9f6ffd;
+    stroke-width: 1.6;
+    stroke-linecap: round;
+    opacity: .82;
+  }
+
+  .da-market-labels {
+    fill: #9a9aa3;
+    font-size: 8px;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .da-chart-footer {
+    padding: 3px 16px 13px;
+    display: flex;
+    align-items: center;
+    gap: 13px;
+    color: #70707b;
+    font-size: 8px;
+  }
+
+  .da-chart-footer span {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+  }
+
+  .da-chart-footer small {
+    margin-left: auto;
+    color: #9a9aa3;
+  }
+
+  .da-orderbook-head {
+    padding: 8px 13px;
+    display: flex;
+    justify-content: space-between;
+    background: #fafafa;
+    color: #8b8b94;
+    font-size: 8px;
+    font-weight: 650;
+  }
+
+  .da-orderbook-side {
+    display: grid;
+  }
+
+  .da-orderbook-side > div {
+    position: relative;
+    isolation: isolate;
+    padding: 4px 13px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    min-height: 25px;
+    font-size: 9px;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .da-orderbook-side > div::before {
+    content: "";
+    position: absolute;
+    z-index: -1;
+    top: 1px;
+    right: 0;
+    bottom: 1px;
+    width: var(--depth);
+    border-radius: 2px 0 0 2px;
+    background: color-mix(in srgb, var(--book-color) 11%, transparent);
+  }
+
+  .da-orderbook-side strong {
+    color: #70707b;
+    font-weight: 450;
+  }
+
+  .da-orderbook-side.is-ask {
+    --book-color: #f8495e;
+  }
+
+  .da-orderbook-side.is-ask > div > span {
+    color: #ec4358;
+  }
+
+  .da-orderbook-side.is-bid {
+    --book-color: #12b76a;
+  }
+
+  .da-orderbook-side.is-bid > div > span {
+    color: #0f9f5e;
+  }
+
+  .da-orderbook-mid {
+    min-height: 50px;
+    padding: 8px 13px;
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    border-top: 1px solid #f0f0f3;
+    border-bottom: 1px solid #f0f0f3;
+  }
+
+  .da-orderbook-mid strong {
+    color: #12a967;
+    font-size: 18px;
+    font-weight: 750;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .da-orderbook-mid span {
+    color: #8b8b94;
+    font-size: 8px;
+  }
+
+  .da-orderbook-footer {
+    padding: 10px 13px 13px;
+    display: flex;
+    align-items: center;
+    gap: 11px;
+    color: #70707b;
+    font-size: 8px;
+  }
+
+  .da-orderbook-footer i {
+    display: inline-block;
+    width: 6px;
+    height: 6px;
+    margin-right: 4px;
+    border-radius: 50%;
+  }
+
+  .da-orderbook-footer .is-ask {
+    background: #f8495e;
+  }
+
+  .da-orderbook-footer .is-bid {
+    background: #12b76a;
+  }
+
+  .da-orderbook-footer small {
+    margin-left: auto;
+    color: #9a9aa3;
+  }
+
+  .da-order-side {
+    margin: 14px 16px 12px;
+    border-radius: 7px;
+    background: #f4f4f5;
+  }
+
+  .da-order-side button {
+    border-radius: 6px;
+    font-size: 11px;
+  }
+
+  .da-order-side button.is-buy {
+    background: #12b76a;
+    color: #ffffff;
+  }
+
+  .da-order-side button.is-sell {
+    background: #f8495e;
+    color: #ffffff;
+  }
+
+  .da-field-row {
+    padding: 0 16px 11px;
+  }
+
+  .da-inputwrap,
+  .da-selectwrap {
+    min-height: 42px;
+  }
+
+  .da-order-summary {
+    margin: 0 16px 12px;
+    border-radius: 7px;
+    background: #fafafa;
+  }
+
+  .da-precheck {
+    margin-right: 16px;
+    margin-left: 16px;
+  }
+
+  .da-submit {
+    margin-right: 16px;
+    margin-left: 16px;
+    background: #12b76a;
+    color: #ffffff;
+  }
+
+  .da-submit:hover {
+    background: #0f9f5e;
+  }
+
+  .da-order-note {
+    margin-right: 16px;
+    margin-left: 16px;
+  }
+
+  .da-chat-starters {
+    padding: 4px 16px 14px;
+  }
+
+  #screen-assistant:has(.da-messages:not(:empty)) .da-chat-starters {
+    display: none;
+  }
+
+  .da-chat-starters > p {
+    margin-bottom: 9px;
+    color: #70707b;
+    font-size: 10px;
+    font-weight: 650;
+  }
+
+  .da-chat-starters > div {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 9px;
+  }
+
+  .da-chat-starters button {
+    min-width: 0;
+    min-height: 76px;
+    padding: 12px;
+    display: flex;
+    align-items: flex-start;
+    gap: 9px;
+    border: 1px solid #e8ebff;
+    border-radius: 8px;
+    background: #fafafa;
+    color: #3f3f46;
+    text-align: left;
+  }
+
+  .da-chat-starters button:hover {
+    border-color: #c8b5f8;
+    background: #f7f3ff;
+    color: #6727e4;
+  }
+
+  .da-chat-starters button > svg {
+    width: 16px;
+    height: 16px;
+    margin-top: 1px;
+    flex: 0 0 auto;
+  }
+
+  .da-chat-starters button > span {
+    min-width: 0;
+    display: grid;
+    gap: 4px;
+    font-size: 11px;
+    font-weight: 650;
+    line-height: 1.35;
+  }
+
+  .da-chat-starters small {
+    color: #8b8b94;
+    font-size: 9px;
+    font-weight: 400;
+  }
+
+  .da-composer,
+  .da-context-card,
+  .da-learning {
+    border-color: #e8ebff;
+  }
+
+  .da-assistant-avatar {
+    background: #f0eaff;
+    color: #6727e4;
+  }
+
+  .da-chart-legend .da-legend-brand,
+  .da-account-fill {
+    stroke: #9f6ffd;
+    fill: rgba(159, 111, 253, .18);
+  }
+
+  .da-account-line {
+    stroke: #9f6ffd;
+  }
+
+  @media (max-width: 1240px) {
+    .da-trade-layout {
+      grid-template-columns: 260px minmax(0, 1fr);
+      grid-template-areas:
+        "watch chart"
+        "watch book"
+        "order order";
+    }
+
+    .da-topmeta .da-clock,
+    .da-topmeta .da-status {
+      display: none;
+    }
+  }
+
+  @media (max-width: 880px) {
+    .da-topbar {
+      position: static;
+      min-height: 64px;
+      padding: 12px 16px;
+      flex-wrap: wrap;
+    }
+
+    .da-rail {
+      position: static;
+      height: auto;
+      min-height: 50px;
+      padding: 0 12px;
+    }
+
+    .da-navitem {
+      width: auto;
+      padding: 0 13px;
+    }
+
+    .da-railsummary {
+      display: none;
+    }
+
+    .da-main {
+      padding: 16px 12px 28px;
+    }
+
+    .da-trade-layout {
+      grid-template-columns: minmax(0, 1fr);
+      grid-template-areas:
+        "watch"
+        "chart"
+        "book"
+        "order";
+    }
+
+    .da-chart-stats {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .da-kpis {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .da-chat-starters > div {
+      grid-template-columns: minmax(0, 1fr);
+    }
+
+    .da-market-group-head {
+      align-items: flex-start;
+      flex-direction: column;
+    }
+
+    .da-group-stats {
+      width: 100%;
+      justify-content: flex-start;
+    }
+
+    .da-group-stat {
+      flex: 1 1 140px;
+    }
+  }
+
+  @media (max-width: 620px) {
+    .da-brand > div:last-child > span,
+    .da-topmeta .da-langtoggle,
+    .da-session-controls > strong {
+      display: none;
+    }
+
+    .da-topbar {
+      gap: 10px;
+    }
+
+    .da-topmeta {
+      margin-left: auto;
+    }
+
+    .da-pagehead h1 {
+      font-size: 22px;
+    }
+
+    .da-kpis,
+    .da-chart-stats,
+    .da-field-row {
+      grid-template-columns: minmax(0, 1fr);
+    }
+
+    .da-trade-chart-head {
+      flex-direction: column;
+    }
+
+    .da-chart-range {
+      width: 100%;
+    }
+
+    .da-chart-range button {
+      flex: 1;
+    }
+
+    .da-market-chart {
+      min-height: 210px;
+    }
+
+    .da-fx-assumptions span:first-child {
+      width: 100%;
+    }
+
+    .da-nbbo-legend {
+      display: none;
+    }
+
+    .da-sign-in .da-sign-in-card {
+      padding: 26px 22px;
+    }
+  }
 </style>
 
 <script>
@@ -2833,6 +4453,13 @@
       "比价大屏": "Price Comparison",
       "自选操作": "Watchlist & Trade",
       "聊天助手": "AI Assistant",
+      "试试这样问": "Try asking",
+      "比较 BTC / USDT 的跨平台报价": "Compare BTC / USDT across venues",
+      "查看价差、费用与推荐平台": "Review spreads, fees and the recommended venue",
+      "解释我的风险等级和产品上限": "Explain my risk level and product cap",
+      "结合当前问卷结果说明": "Use my current assessment result",
+      "我如何计算买入手续费和滑点？": "How are trading fees and slippage calculated?",
+      "了解交易成本的计算方法": "Learn how trading costs are calculated",
       "账户统计": "Account Analytics",
       "可用余额": "Available Balance",
       "查看账户": "View Account",
@@ -2998,6 +4625,7 @@
       "通知": "Notifications",
       "用户 Leo": "User Leo",
       "主导航": "Main Navigation",
+      "推荐问题": "Suggested questions",
       "比较范围": "Comparison Scope",
       "资产筛选": "Asset Filters",
       "BTC 两个交易所近 24 小时价差走势，当前为 0.071%": "24-hour BTC cross-venue spread trend, currently 0.071%",
