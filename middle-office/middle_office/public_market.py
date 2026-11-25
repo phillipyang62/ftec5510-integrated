@@ -19,18 +19,38 @@ ASSETS = {
     "BTC": ("Bitcoin", ["比特币", "XBT"]),
     "ETH": ("Ethereum", ["以太坊", "以太币"]),
     "SOL": ("Solana", ["索拉纳"]),
+    "XRP": ("XRP", ["瑞波币"]),
+    "DOGE": ("Dogecoin", ["狗狗币"]),
+    "ADA": ("Cardano", ["艾达币"]),
+    "LINK": ("Chainlink", []),
+    "AVAX": ("Avalanche", ["雪崩"]),
+    "DOT": ("Polkadot", ["波卡"]),
+    "LTC": ("Litecoin", ["莱特币"]),
+    "USDT": ("Tether", ["泰达币"]),
+    "USDC": ("USD Coin", []),
 }
-USDT_PAIRS = ("BTC/USDT", "ETH/USDT", "SOL/USDT")
-HK_PAIRS = ("BTC/USD", "ETH/USD", "SOL/USD", "BTC/HKD", "ETH/HKD")
+USDT_PAIRS = tuple(f"{ticker}/USDT" for ticker in (
+    "BTC ETH SOL XRP LINK AVAX ADA DOGE DOT LTC BCH UNI ATOM XLM SUI NEAR APT ETC HBAR TRX "
+    "BNB SHIB PEPE FIL ARB OP ICP AAVE INJ POL SEI WLD RENDER ALGO GRT COMP ZEC STX USDC RLUSD USDS"
+).split())
+KRAKEN_PAIRS = {"XBTUSDT": "BTC/USDT", **{
+    f"{ticker}USDT": f"{ticker}/USDT" for ticker in
+    "ETH SOL XRP LINK AVAX ADA DOT LTC BCH ATOM BNB TON SHIB ALGO USDC DAI RLUSD".split()
+}}
+HK_PAIRS = ("BTC/USD", "ETH/USD", "SOL/USD", "BTC/HKD", "ETH/HKD", "LINK/USD", "USDT/USD", "USDT/HKD")
 PROVIDER_MARKETS = {
-    "Binance": USDT_PAIRS, "OKX": USDT_PAIRS, "Kraken": USDT_PAIRS,
-    "HashKey": (*HK_PAIRS, "BTC/USDT", "ETH/USDT"), "OSL": HK_PAIRS,
+    "Binance": (*USDT_PAIRS, "FDUSD/USDT", "TUSD/USDT"),
+    "OKX": (*USDT_PAIRS, "TON/USDT", "PYUSD/USDT"),
+    "Kraken": tuple(KRAKEN_PAIRS.values()),
+    "HashKey": (*HK_PAIRS, "BTC/USDT", "ETH/USDT", "FDUSD/USD", "RLUSD/USD",
+                "AAVE/USD", "ARB/USD", "POL/USD", "OP/USD", "LTC/USD", "SUI/USD",
+                "APT/USD", "XRP/USD", "AVAX/USD", "DOGE/USD", "UNI/USD"),
+    "OSL": (*HK_PAIRS, "SOL/HKD", "RLUSD/HKD", "USDGO/USD", "USDGO/USDT"),
 }
-BINANCE_PAIRS = {symbol.replace("/", ""): symbol for symbol in USDT_PAIRS}
-OKX_PAIRS = {symbol.replace("/", "-"): symbol for symbol in USDT_PAIRS}
-KRAKEN_PAIRS = {"XBTUSDT": "BTC/USDT", "ETHUSDT": "ETH/USDT", "SOLUSDT": "SOL/USDT"}
+BINANCE_PAIRS = {symbol.replace("/", ""): symbol for symbol in PROVIDER_MARKETS["Binance"]}
+OKX_PAIRS = {symbol.replace("/", "-"): symbol for symbol in PROVIDER_MARKETS["OKX"]}
 HASHKEY_PAIRS = {symbol.replace("/", ""): symbol for symbol in PROVIDER_MARKETS["HashKey"]}
-OSL_PAIRS = {symbol.replace("/", ""): symbol for symbol in HK_PAIRS}
+OSL_PAIRS = {symbol.replace("/", ""): symbol for symbol in PROVIDER_MARKETS["OSL"]}
 HASHKEY_BASE = "https://api-pro.hashkey.com/quote/v1/ticker/"
 OSL_PUBLIC_STREAM = "wss://stream-hk.osl.com/ws/v5/public"
 BINANCE_QUERY = urlencode({"symbols": json.dumps(list(BINANCE_PAIRS), separators=(",", ":"))})
@@ -45,9 +65,20 @@ def _from_milliseconds(value):
 
 
 def _quote(symbol, venue, price, bid, ask, bid_size, ask_size, at, timestamp_source):
-    name, aliases = ASSETS[symbol.split("/")[0]]
-    return {"symbol": symbol, "source": venue, "price": price, "bid": bid, "ask": ask,
-            "bid_size": bid_size, "ask_size": ask_size, "as_of": iso(at), "timestamp_source": timestamp_source,
+    fields = ("price", "bid", "ask", "bid_size", "ask_size")
+    try:
+        values = {
+            field: number(amount(Decimal(str(value))), field, positive=True)
+            for field, value in zip(fields, (price, bid, ask, bid_size, ask_size))
+        }
+    except (BusinessError, InvalidOperation, ValueError):
+        return None
+    if values["bid"] > values["ask"]:
+        return None
+    ticker = symbol.split("/")[0]
+    name, aliases = ASSETS.get(ticker, (ticker, []))
+    return {"symbol": symbol, "source": venue, **{field: amount(value) for field, value in values.items()},
+            "as_of": iso(at), "timestamp_source": timestamp_source,
             "fee_rate": None, "name": name, "aliases": [*aliases, symbol.replace("/", "")]}
 
 
@@ -82,19 +113,11 @@ HTTP_PROVIDERS = {
 
 
 def _hk_quote(symbol, venue, values, timestamp):
-    fields = ("price", "bid", "ask", "bid_size", "ask_size")
     try:
-        price, bid, ask, bid_size, ask_size = (
-            number(Decimal(str(value)).normalize(), field, positive=True)
-            for field, value in zip(fields, values)
-        )
         at = _from_milliseconds(timestamp)
-    except (BusinessError, InvalidOperation, ValueError, TypeError, OSError, OverflowError):
+    except (ValueError, TypeError, OSError, OverflowError):
         return None
-    if bid > ask:
-        return None
-    return _quote(symbol, venue, amount(price), amount(bid), amount(ask),
-                  amount(bid_size), amount(ask_size), at, "exchange")
+    return _quote(symbol, venue, *values, at, "exchange")
 
 
 def _hashkey(fetch):
@@ -188,6 +211,7 @@ class PublicMarketFeed:
             quotes = decode(payload, received)
         if self.stop_event.is_set():
             return []
+        quotes = [row for row in quotes if row is not None]
         statuses = {row["symbol"] for row in quotes if self.office._fresh(row)}
         if not statuses:
             raise ValueError("No current tracked quotes")

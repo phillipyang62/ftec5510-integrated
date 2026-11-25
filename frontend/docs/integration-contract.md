@@ -123,6 +123,8 @@ GET /v1/risk/{user_id}?quote_currency=USDT
 
 ## 3. 行情边界
 
+`GET /api/market/catalog` 由 BFF 转发给中台，返回 `market_mode` 和 `pairs`。`pairs` 的键是交易对，值是已配置的报价来源数组，例如 `{"BTC/USD":["HashKey","OSL"]}`。前端使用目录生成币种和计价币选项。报价及可用状态仍以 `GET /api/market/venues` 中返回的具体交易对为准。离线模式沿用模拟交易对。
+
 AI 后端的 `/v1/market/quotes` 是单交易对参考价：
 
 ```json

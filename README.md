@@ -17,7 +17,7 @@ python run_demo.py --live-market
 python -X utf8 check_integration.py --live-market
 ```
 
-第一条命令启动三个 HTTP 服务。打开终端打印的本机网址，通常为 `http://127.0.0.1:5510/`。输入演示账户名（如 `student_demo`）进入工作台。首次使用该名称会创建模拟账户，未做风险测评时会显示问卷，也可以稍后填写。点击顶部「切换账户」可退出当前会话；在同一次演示运行中，重输同名可继续使用原来的余额、持仓、订单和画像。`--live-market` 读取真实现货报价，账户和订单仍在本地模拟。省略该参数即可离线演示，使用两家模拟报价来源。退出演示会清理临时数据库。第二条命令独立复测离线流程及公开行情。
+第一条命令启动三个 HTTP 服务。打开终端打印的本机网址，通常为 `http://127.0.0.1:5510/`。输入演示账户名（如 `student_demo`）进入工作台。首次使用该名称会创建模拟账户，未做风险测评时会显示问卷，也可以稍后填写。点击顶部「切换账户」退出当前会话。`--live-market` 读取真实现货报价，账户和订单仍在本地模拟。省略该参数即可离线演示，使用两家模拟报价来源。默认退出演示会清理临时数据库。启动时用 `--data-dir <目录>` 可保留账本和画像，下次用相同目录和账户名即可继续。第二条命令独立复测离线流程及公开行情。
 
 仓库只运行一套联调版。可用 `python run_demo.py` 启动，也可在 Windows 双击 `frontend/start_preview.bat`。直接打开 `frontend/index.html` 会显示启动命令。
 
@@ -33,8 +33,8 @@ python -X utf8 check_integration.py --live-market
 - 风险问卷采用原设计的 30 道计分题和五维权重。KE2 可以多选，按最高选项得分计。后端计算 RAI、财务承载力封顶、红旗封顶与 C/R 等级，原设计样例得到 RAI 61、C3、R3。首次答卷提交后，中台与 AI 保存派生结果，原始选项留在本次表单处理内。[问卷原仓库 `6171544`](https://github.com/1242388305pj-ux/pj_questiontest/tree/6171544562dad80f70584915db41c50d48938efd)
 - 测评结果页显示综合分、等级和产品上限，「查看对应投教」按当前画像加载一段短课。读完可点「打开模拟下单页」，选择买入或卖出并预览，再确认模拟订单。对应投教走本地规则，聊天助手仍接受自由提问。
 - 问卷置信度使用直选、答题耗时（调用方提供时）、选项变更和交叉校验。原文未给交叉校验数值阈值，演示以两项评分差至少 3 或高低档组合标记待复核，分数保持原公式。浏览器记录选项变更，不采集逐题耗时和可选背景信息。
-- 公开模式每 10 秒独立拉取 Binance、OKX、Kraken 的 BTC/USDT、ETH/USDT、SOL/USDT。读取公开现货接口无需账号或 API Key。买卖方向和计价币保持统一，支持按买卖一档比较。45 秒后旧报价退出比价，某一来源失败时其余来源继续刷新。Binance 和 OKX 使用接口时间字段，Kraken 该端点使用采集时间。开放状态可通过 `/api/health` 查看。[Binance 文档](https://developers.binance.com/en/docs/products/spot/faqs/market_data_only) · [OKX 文档](https://www.okx.com/docs-v5/en/#order-book-trading-market-data-get-tickers) · [Kraken 文档](https://docs.kraken.com/api-reference/market-data/get-ticker-information)
-- HashKey 香港站通过公开 REST 读取最新成交及买卖一档，OSL 香港站通过公开 WebSocket 获取同样的数据。公开模式的「现货交易对」可在两家之间比较 BTC/USD、ETH/USD、SOL/USD、BTC/HKD、ETH/HKD。HashKey 还提供 BTC/USDT、ETH/USDT，纳入现有 USDT 比价。美元和港币交易对供比价，模拟账本以 USDT 计价。未安装可选客户端时，OSL 在 `/api/health` 中显示 `dependency_missing`，其余源继续工作。[HashKey 香港行情文档](https://docs.hashkey.com/hk/en/index.html#public-market-data-spot-amp-futures) · [OSL 公开频道](https://osl.com/reference/stream-subscrition-api) · [OSL Ticker 字段](https://osl.com/reference/market-data)
+- 公开模式支持 48 个币种、71 个交易对，包括 XRP、LINK、DOGE、ADA、AVAX 和多种稳定币。比价页根据中台目录展示币种和计价币，按同一计价币比较买卖一档。45 秒后旧报价退出比价，行情源独立刷新。Binance 和 OKX 使用接口时间字段，Kraken 使用采集时间。各来源状态可通过 `/api/health` 查看。[Binance 文档](https://developers.binance.com/en/docs/products/spot/faqs/market_data_only) · [OKX 文档](https://www.okx.com/docs-v5/en/#order-book-trading-market-data-get-tickers) · [Kraken 文档](https://docs.kraken.com/api-reference/market-data/get-ticker-information)
+- 比价页默认展示 BTC/USD 的 HashKey 与 OSL 香港站行情。也可切换 LINK/USD、USDT/USD、USDT/HKD 等两家共同覆盖的交易对。HashKey 使用公开 REST，OSL 使用公开 WebSocket。未安装可选客户端时，OSL 在 `/api/health` 中显示 `dependency_missing`。模拟下单仍使用 BTC/USDT、ETH/USDT 和 SOL/USDT。[HashKey 香港行情文档](https://docs.hashkey.com/hk/en/index.html#public-market-data-spot-amp-futures) · [OSL Ticker 字段](https://osl.com/reference/market-data)
 
 ## 已接通的 API
 

@@ -272,6 +272,7 @@ def offline_checks():
         print("PASS frontend assets, loopback origin, and both backend health checks")
 
         check_sign_in(ui)
+        assert checked(ui, "GET", "/api/market/catalog") == {"market_mode": "simulation", "pairs": {}}
         print("PASS account-name sign-in, session cookie, and anonymous access check")
 
         check_session_models(url)
@@ -350,6 +351,11 @@ def live_checks():
         check_html(url)
         check_sign_in(ui)
         questionnaire_form(ui, middle, ai)
+        catalog = checked(ui, "GET", "/api/market/catalog")
+        assert catalog["market_mode"] == "public"
+        assert {"HashKey", "OSL"} == set(catalog["pairs"]["BTC/USD"])
+        assert {"Binance", "OKX", "Kraken"} <= set(catalog["pairs"]["USDC/USDT"])
+        assert {symbol for symbol in USDT_PAIRS + HK_PAIRS} <= catalog["pairs"].keys()
         deadline = monotonic() + 22
         for symbol in USDT_PAIRS:
             live_comparison(ui, symbol, deadline)
@@ -368,6 +374,9 @@ def live_checks():
             venues = {row["source"] for row in hk_chat["market"][0]["venues"] if row["freshness"] == "fresh"}
             assert venues == hk_sources
             print("PASS the assistant reads both Hong Kong venues in HKD")
+        new_asset = checked(ui, "POST", "/api/assistant/chat", {"message": "比较 XRP/USDT 的报价", "market_queries": ["XRP/USDT"]})
+        assert {"Binance", "OKX"} <= {row["source"] for row in new_asset["market"][0]["venues"] if row["freshness"] == "fresh"}
+        print("PASS expanded catalog and XRP quotes reach the assistant")
 
 
 def main():

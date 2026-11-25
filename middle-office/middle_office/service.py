@@ -283,6 +283,13 @@ class MiddleOffice:
                     "ranking_basis": "bid_ask_excluding_fees" if pre_fee else "total_with_fees",
                     "slippage_model": "top_of_book_only" if self.public_sources else "none_full_fill_at_bid_ask"}
 
+    def market_catalog(self):
+        pairs = {}
+        for source in sorted(self.public_sources):
+            for symbol in self.public_source_pairs.get(source, ()):
+                pairs.setdefault(symbol, []).append(source)
+        return {"market_mode": "public" if self.public_sources else "simulation", "pairs": pairs}
+
     def _reserved(self, state, user, currency=None, symbol=None, exclude=None):
         result = D(0)
         for order in state["orders"].values():

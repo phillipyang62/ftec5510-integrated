@@ -68,9 +68,12 @@ def start_server(resources, server):
 
 
 @contextmanager
-def demo_stack(*, ui_port=None, ollama_model=None, enable_deepseek=False, live_market=False):
-    with TemporaryDirectory(prefix="harbor-invest-") as directory, ExitStack() as resources:
-        db = Path(directory)
+def demo_stack(*, ui_port=None, ollama_model=None, enable_deepseek=False, live_market=False, data_dir=None):
+    with ExitStack() as resources:
+        db = Path(data_dir) if data_dir is not None else Path(resources.enter_context(
+            TemporaryDirectory(prefix="harbor-invest-")
+        ))
+        db.mkdir(parents=True, exist_ok=True)
         operator, reader, ai_token = (token_urlsafe(24) for _ in range(3))
         sources = PROVIDER_MARKETS if live_market else {}
         office = MiddleOffice(db / "ledger.sqlite3", max_quote_age=QUOTE_MAX_AGE if live_market else 120,
@@ -128,10 +131,11 @@ def main():
     parser.add_argument("--ollama-model", help="Installed local Ollama model")
     parser.add_argument("--enable-deepseek", action="store_true", help="Opt in to the API-key model")
     parser.add_argument("--live-market", action="store_true", help="use public spot quotes; execution stays simulated")
+    parser.add_argument("--data-dir", type=Path, help="reuse a directory for the simulation databases")
     args = parser.parse_args()
     try:
         with demo_stack(ui_port=args.port, ollama_model=args.ollama_model, enable_deepseek=args.enable_deepseek,
-                        live_market=args.live_market) as stack:
+                        live_market=args.live_market, data_dir=args.data_dir) as stack:
             mode = "public market data, simulated execution" if args.live_market else "offline simulation"
             print(f"Harbor Invest ({mode}): {stack[-1]}/  (Ctrl+C to stop)", flush=True)
             if args.open_browser:
