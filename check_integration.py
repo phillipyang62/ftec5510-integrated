@@ -119,41 +119,70 @@ def check_session_models(url):
         checked(client, "POST", "/api/session", {"account_name": "student_models"})
     settings_path = "/api/model-settings"
     default = {"provider": "default", "model": None, "has_api_key": False}
-    key = "fake-deepseek-integration-fixture"
-    settings = {"provider": "deepseek", "api_key": key, "allow_billing": True}
     question = {"message": "Explain what slippage means in one sentence."}
+    answer = "Slippage is the change from the expected execution price."
+    providers = (
+        ("deepseek", "api.deepseek.com", "deepseek-flash"),
+        ("openai", "api.openai.com", "gpt-4.1-mini"),
+        ("gemini", "generativelanguage.googleapis.com", "gemini-3.1-flash-lite"),
+    )
+    catalog = checked(first, "GET", settings_path)
+    assert catalog["settings"] == default and isinstance(catalog["ollama"]["models"], list)
+    assert set(catalog["remote_providers"]) == {provider for provider, _, _ in providers}
+    for provider, host, model in providers:
+        assert catalog["remote_providers"][provider]["model"] == model
+        key = f"fake-{provider}-integration-fixture"
+        settings = {"provider": provider, "api_key": key, "allow_billing": True}
+        selected = {"provider": provider, "model": model, "has_api_key": True}
+        with patch("ai_mvp.models.HTTPSConnection") as connect:
+            response = connect.return_value.getresponse.return_value
+            response.status = 200
+            if provider == "gemini":
+                response_body = {"candidates": [{
+                    "content": {"parts": [{"text": "internal", "thought": True}, {"text": answer}]},
+                    "finishReason": "STOP",
+                }]}
+            else:
+                response_body = {"choices": [{"message": {"content": answer}, "finish_reason": "stop"}]}
+            response.read.return_value = json.dumps(response_body).encode("utf-8")
 
-    with patch("ai_mvp.models.HTTPSConnection") as connect:
-        response = connect.return_value.getresponse.return_value
-        response.status = 200
-        response.read.return_value = b'{"choices":[{"message":{"content":"Slippage is the change from the expected execution price."},"finish_reason":"stop"}]}'
-        catalog = checked(first, "GET", settings_path)
-        assert catalog["settings"] == default and isinstance(catalog["ollama"]["models"], list)
-        checked(first, "PUT", settings_path, {**settings, "allow_billing": False}, expected=400)
-        selected = {"provider": "deepseek", "model": catalog["deepseek_model"], "has_api_key": True}
-        assert checked(first, "PUT", settings_path, settings) == selected
-        assert checked(first, "GET", settings_path)["settings"] == selected
-        assert checked(second, "GET", settings_path)["settings"] == default
-        ignored_override = checked(second, "POST", "/api/assistant/chat", {**question, "model_settings": settings})
-        assert ignored_override["generation"] == "template"
-        connect.assert_not_called()
+            checked(first, "PUT", settings_path, {**settings, "allow_billing": False}, expected=400)
+            checked(first, "PUT", settings_path, {**settings, "api_key": ""}, expected=400)
+            assert checked(first, "PUT", settings_path, settings) == selected
+            assert checked(first, "PUT", settings_path, {**settings, "api_key": ""}) == selected
+            assert checked(first, "GET", settings_path)["settings"] == selected
+            assert checked(second, "GET", settings_path)["settings"] == default
+            ignored_override = checked(second, "POST", "/api/assistant/chat", {**question, "model_settings": settings})
+            assert ignored_override["generation"] == "template"
+            connect.assert_not_called()
 
-        reply = checked(first, "POST", "/api/assistant/chat", question)
-        assert reply["generation"] == "remote_model" and reply["model_name"] == selected["model"]
-        assert key not in json.dumps(reply)
-        connect.assert_called_once()
-        assert connect.call_args.args == ("api.deepseek.com", 443)
-        call = connect.return_value.request.call_args
-        assert call.args == ("POST", "/v1/chat/completions")
-        assert call.kwargs["headers"]["Authorization"] == f"Bearer {key}"
-        assert json.loads(call.kwargs["body"])["model"] == selected["model"]
+            reply = checked(first, "POST", "/api/assistant/chat", question)
+            assert reply["generation"] == "remote_model" and reply["model_name"] == model
+            assert reply["reply"] == answer and key not in json.dumps(reply)
+            connect.assert_called_once()
+            assert connect.call_args.args == (host, 443)
+            call = connect.return_value.request.call_args
+            headers, body = call.kwargs["headers"], json.loads(call.kwargs["body"])
+            assert key not in json.dumps(body)
+            if provider == "gemini":
+                assert call.args == ("POST", f"/v1beta/models/{model}:generateContent")
+                assert headers["x-goog-api-key"] == key and "Authorization" not in headers
+                assert "systemInstruction" in body and body["generationConfig"]["maxOutputTokens"] == 512
+            else:
+                assert call.args == ("POST", "/v1/chat/completions")
+                assert headers["Authorization"] == f"Bearer {key}"
+                assert body["model"] == model
+                if provider == "openai":
+                    assert body["max_completion_tokens"] == 320 and body["store"] is False
+                else:
+                    assert body["thinking"] == {"type": "disabled"}
 
-        reply = checked(first, "POST", "/api/assistant/chat", {**question, "include_account": True})
-        assert reply["generation"] == "template"
-        connect.assert_called_once()
-        checked(first, "DELETE", "/api/session")
-        checked(first, "POST", "/api/session", {"account_name": "student_models"})
-        assert checked(first, "GET", settings_path)["settings"] == default
+            reply = checked(first, "POST", "/api/assistant/chat", {**question, "include_account": True})
+            assert reply["generation"] == "template"
+            connect.assert_called_once()
+    checked(first, "DELETE", "/api/session")
+    checked(first, "POST", "/api/session", {"account_name": "student_models"})
+    assert checked(first, "GET", settings_path)["settings"] == default
 
 
 def questionnaire_form(ui, middle, ai):
@@ -276,7 +305,7 @@ def offline_checks():
         print("PASS account-name sign-in, session cookie, and anonymous access check")
 
         check_session_models(url)
-        print("PASS DeepSeek request via mock, explicit billing opt-in, and per-login key isolation")
+        print("PASS mocked DeepSeek, OpenAI and Gemini calls, consent, provider key isolation and account privacy")
 
         questionnaire_form(ui, middle, ai)
         print("PASS questionnaire, example RAI 61/C3/R3, risk caps and profile-based education")

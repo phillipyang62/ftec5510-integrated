@@ -174,7 +174,7 @@ class ApiHandler(BaseHTTPRequestHandler):
                 provider, model = self._session_model(settings)
                 if provider == "ollama":
                     models = (("local_model", model),)
-                elif provider == "deepseek":
+                elif model is not None:
                     models = (("remote_model", model), ("local_model", assistant.model))
             return 200, assistant.respond(user_id, payload, models=models)
         raise ApiError(404, "not_found", "unknown endpoint")

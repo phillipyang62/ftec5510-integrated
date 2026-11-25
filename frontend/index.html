@@ -580,18 +580,17 @@
                 <select id="model-provider" autofocus>
                   <option value="default">启动时配置</option>
                   <option value="ollama">本地 Ollama</option>
-                  <option value="deepseek">DeepSeek API</option>
                 </select>
                 <div id="ollama-fields" class="da-model-fields" hidden>
                   <label for="ollama-model">已安装模型</label>
                   <select id="ollama-model"></select>
                 </div>
-                <div id="deepseek-fields" class="da-model-fields" hidden>
-                  <label for="deepseek-key">DeepSeek API Key</label>
-                  <input id="deepseek-key" type="password" maxlength="512" autocomplete="off" spellcheck="false">
+                <div id="api-model-fields" class="da-model-fields" hidden>
+                  <label id="api-key-label" for="api-model-key">API Key</label>
+                  <input id="api-model-key" type="password" maxlength="512" autocomplete="off" spellcheck="false">
                   <label class="da-model-consent">
-                    <input id="deepseek-agree" type="checkbox">
-                    <span>同意将对话与风险画像发送给 DeepSeek，并按用量计费。</span>
+                    <input id="api-model-agree" type="checkbox">
+                    <span id="api-model-consent"></span>
                   </label>
                 </div>
                 <p id="model-settings-status" role="status"></p>
@@ -2985,7 +2984,6 @@
       "启动时配置": "Startup defaults",
       "本地 Ollama": "Local Ollama",
       "已安装模型": "Installed model",
-      "同意将对话与风险画像发送给 DeepSeek，并按用量计费。": "I agree to send chat messages and my risk profile to DeepSeek and pay for API usage.",
       "关闭": "Close",
       "保存模型设置": "Save model settings"
     });

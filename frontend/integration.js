@@ -522,13 +522,16 @@
   const modelSettings = one("#model-settings");
   const modelProvider = one("#model-provider");
   const ollamaModel = one("#ollama-model");
-  const deepseekKey = one("#deepseek-key");
-  const deepseekAgree = one("#deepseek-agree");
+  const builtinProviders = [...modelProvider.options];
+  const apiFields = one("#api-model-fields");
+  const apiKey = one("#api-model-key");
+  const apiAgree = one("#api-model-agree");
   const modelStatus = one("#model-settings-status");
   const modelSave = one("#model-settings-save");
   const modelCancel = one("#model-settings-cancel");
   let modelLoad = 0;
-  let savedKey = false;
+  let apiProviders = new Map();
+  let savedKeyProvider = null;
   let history = [];
   input.maxLength = 2000;
   newChat.addEventListener("click", () => {
@@ -540,13 +543,23 @@
 
   function refreshModelFields() {
     const usingOllama = modelProvider.value === "ollama";
-    const usingDeepSeek = modelProvider.value === "deepseek";
+    const provider = apiProviders.get(modelProvider.value);
     one("#ollama-fields").hidden = !usingOllama;
-    one("#deepseek-fields").hidden = !usingDeepSeek;
+    apiFields.hidden = !provider;
     ollamaModel.disabled = !usingOllama;
-    deepseekKey.disabled = deepseekAgree.disabled = !usingDeepSeek;
-    deepseekKey.required = usingDeepSeek && !savedKey;
-    deepseekAgree.required = usingDeepSeek;
+    apiKey.disabled = apiAgree.disabled = !provider;
+    const keepsKey = savedKeyProvider === modelProvider.value;
+    apiKey.required = Boolean(provider && !keepsKey);
+    apiAgree.required = Boolean(provider);
+    apiKey.placeholder = provider && keepsKey
+      ? (document.documentElement.lang === "en" ? "Leave blank to keep the saved key" : "留空可保留已保存的 Key")
+      : "";
+    if (provider) {
+      text(one("#api-key-label"), `${provider.name} API Key`);
+      bilingual(one("#api-model-consent"),
+        `同意将对话与风险画像发送给 ${provider.name}，费用按该平台的 API 规则计算。`,
+        `I agree to send chat messages and my risk profile to ${provider.name} under its API billing terms.`);
+    }
     modelSave.disabled = modelProvider.disabled || (usingOllama && !ollamaModel.value);
     if (usingOllama && !ollamaModel.value) {
       bilingual(modelStatus, "未找到本地模型。启动 Ollama、安装模型后重新打开设置。",
@@ -558,19 +571,20 @@
 
   one("#model-settings-open").addEventListener("click", async () => {
     const load = ++modelLoad;
-    deepseekKey.value = "";
-    deepseekAgree.checked = false;
+    apiKey.value = "";
+    apiAgree.checked = false;
     modelProvider.disabled = modelSave.disabled = true;
-    one("#ollama-fields").hidden = one("#deepseek-fields").hidden = true;
+    one("#ollama-fields").hidden = apiFields.hidden = true;
     bilingual(modelStatus, "正在读取模型设置…", "Loading model settings…");
     modelSettings.showModal();
     try {
       const data = await request("/api/model-settings");
       if (!modelSettings.open || load !== modelLoad) return;
-      savedKey = data.settings.has_api_key;
-      deepseekKey.placeholder = savedKey
-        ? (document.documentElement.lang === "en" ? "Leave blank to keep the saved key" : "留空可保留已保存的 Key")
-        : "";
+      savedKeyProvider = data.settings.has_api_key ? data.settings.provider : null;
+      const previousCatalog = data.deepseek_model ? { deepseek: { name: "DeepSeek", model: data.deepseek_model } } : {};
+      apiProviders = new Map(Object.entries(data.remote_providers ?? previousCatalog));
+      modelProvider.replaceChildren(...builtinProviders, ...Array.from(apiProviders,
+        ([id, provider]) => new Option(`${provider.name} API`, id)));
       ollamaModel.replaceChildren(...data.ollama.models.map((model) => new Option(model, model)));
       if (data.settings.provider === "ollama") ollamaModel.value = data.settings.model;
       modelProvider.value = data.settings.provider;
@@ -586,10 +600,14 @@
 
   modelCancel.addEventListener("click", () => modelSettings.close());
   modelSettings.addEventListener("close", () => {
-    deepseekKey.value = "";
-    deepseekAgree.checked = false;
+    apiKey.value = "";
+    apiAgree.checked = false;
   });
-  modelProvider.addEventListener("change", refreshModelFields);
+  modelProvider.addEventListener("change", () => {
+    apiKey.value = "";
+    apiAgree.checked = false;
+    refreshModelFields();
+  });
   ollamaModel.addEventListener("change", refreshModelFields);
   one("#model-settings-form").addEventListener("submit", async (event) => {
     event.preventDefault();
@@ -597,11 +615,11 @@
     const provider = modelProvider.value;
     const settings = { provider };
     if (provider === "ollama") settings.model = ollamaModel.value;
-    if (provider === "deepseek") {
-      settings.api_key = deepseekKey.value.trim();
-      settings.allow_billing = deepseekAgree.checked;
+    if (apiProviders.has(provider)) {
+      settings.api_key = apiKey.value.trim();
+      settings.allow_billing = apiAgree.checked;
     }
-    modelProvider.disabled = ollamaModel.disabled = deepseekKey.disabled = deepseekAgree.disabled = modelSave.disabled = true;
+    modelProvider.disabled = ollamaModel.disabled = apiKey.disabled = apiAgree.disabled = modelSave.disabled = true;
     modelCancel.disabled = true;
     bilingual(modelStatus, "正在保存…", "Saving…");
     try {
@@ -612,7 +630,7 @@
       refreshModelFields();
       bilingual(modelStatus, "无法保存设置，请检查模型或 API Key。", "Could not save settings. Check the model or API key.");
       if (error.code === "secure_model_service_required") {
-        bilingual(modelStatus, "DeepSeek Key 需要本机 AI 服务或 HTTPS。", "DeepSeek keys require a local or HTTPS AI service.");
+        bilingual(modelStatus, "API Key 需要本机 AI 服务或 HTTPS。", "API keys require a local or HTTPS AI service.");
       }
     } finally {
       modelCancel.disabled = false;

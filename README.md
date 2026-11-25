@@ -21,7 +21,7 @@ python -X utf8 check_integration.py --live-market
 
 仓库只运行一套联调版。可用 `python run_demo.py` 启动，也可在 Windows 双击 `frontend/start_preview.bat`。直接打开 `frontend/index.html` 会显示启动命令。
 
-登录后，在聊天助手右上角打开「模型设置」。本地 Ollama 会列出本机已安装的模型。选择 DeepSeek API 时填入自己的 Key，并确认按用量计费。Key 只保留在本次登录会话的服务端内存里，保存设置不会发起 DeepSeek 调用。聊天会标注实际使用的模型或内置回复。涉及持仓或挂单的账户上下文只用于本机处理。
+登录后，在聊天助手右上角打开「模型设置」。可选择本地 Ollama，或选择 DeepSeek、OpenAI、Gemini 并填入对应平台的 API Key。三个 API 默认使用 `deepseek-flash`、`gpt-4.1-mini`、`gemini-3.1-flash-lite`。Key 只保留在本次登录会话的服务端内存里，费用按实际发出的请求和所选平台规则计算。聊天会标注实际使用的模型或内置回复。涉及持仓或挂单的账户上下文只用于本机处理。
 
 启动时也可用 `--ollama-model <本机已安装的模型>`，或在进程环境设置 `DEEPSEEK_API_KEY` 后加 `--enable-deepseek`。两种启动配置同时启用时，优先尝试 Ollama。未配置模型时使用内置回复。
 
@@ -48,6 +48,6 @@ python -X utf8 check_integration.py --live-market
 - 模拟账户只供本机访问。仅凭名称选择账户，不验证身份；知道名称的人可以进入同一演示账户。请勿使用真实凭证或敏感数据。
 - 公开行情展示买卖一档及数量，报价排名未纳入账户交易费、完整订单簿或滑点。数量大于一档挂单时标记深度不足。演示账本用公开报价模拟成交时将未知手续费按零处理，并在预览提示。
 - AI 与前端都能看到多来源报价。持仓估值仍以新鲜参考价为基础，AI 风险统计与中台账本估值使用各自快照。历史走势、报表导出、资金划转和自选管理仍是原型功能。
-- HTTP 联调覆盖内置回复、三模块数据流和模拟 DeepSeek 请求。真实模型生成需要本机 Ollama 或有效的 DeepSeek Key。
+- HTTP 联调覆盖内置回复、三模块数据流和模拟的 DeepSeek、OpenAI、Gemini 请求。真实模型生成需要本机 Ollama 或所选平台的有效 Key。
 
 协作约定见 [CLAUDE.md](CLAUDE.md)。

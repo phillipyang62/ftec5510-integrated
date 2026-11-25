@@ -11,8 +11,15 @@ _DEFAULT_URL = "http://127.0.0.1:11434"
 _DEFAULT_TIMEOUT = 90.0
 _REMOTE_TIMEOUT = 30.0
 _DEEPSEEK_HOST = "api.deepseek.com"
+_OPENAI_HOST = "api.openai.com"
+_GEMINI_HOST = "generativelanguage.googleapis.com"
 _DEFAULT_REMOTE_URL = f"https://{_DEEPSEEK_HOST}/v1"
 _DEFAULT_REMOTE_MODEL = "deepseek-flash"
+_REMOTE_PROVIDERS = {
+    "deepseek": {"name": "DeepSeek", "model": _DEFAULT_REMOTE_MODEL},
+    "openai": {"name": "OpenAI", "model": "gpt-4.1-mini"},
+    "gemini": {"name": "Gemini", "model": "gemini-3.1-flash-lite"},
+}
 _CHAT_COMPLETIONS = "/v1/chat/completions"
 _MAX_RESPONSE_BYTES = 1_000_000
 _CLOUD_MODEL = re.compile(r"(?:-|:)cloud(?::[^/]*)?$", re.IGNORECASE)
@@ -34,14 +41,15 @@ def _request_json(
     method: str,
     path: str,
     data: dict | None = None,
-    api_key: str | None = None,
+    *,
+    auth_headers: dict[str, str] | None = None,
 ) -> dict:
     body = json.dumps(data).encode("utf-8") if data is not None else None
     headers = {"Accept": "application/json"}
     if body is not None:
         headers["Content-Type"] = "application/json"
-    if api_key is not None:
-        headers["Authorization"] = f"Bearer {api_key}"
+    if auth_headers:
+        headers.update(auth_headers)
 
     try:
         connection.request(method, path, body=body, headers=headers)
@@ -141,6 +149,19 @@ class OllamaModel:
         return content
 
 
+def _validate_remote_config(api_key: str, timeout: float) -> None:
+    if not api_key or any(not 33 <= ord(char) <= 126 for char in api_key):
+        raise ValueError("The remote API key must contain printable ASCII characters without spaces")
+    if not 1 <= timeout <= 120:
+        raise ValueError("AI_MVP_REMOTE_TIMEOUT_SECONDS must be between 1 and 120")
+
+
+def _remote_text(content, api_key: str) -> str:
+    if not isinstance(content, str) or not content.strip() or api_key in content:
+        raise ModelUnavailable("The remote model returned no final answer")
+    return content.strip()
+
+
 class OpenAICompatibleModel:
     def __init__(self, model: str, url: str, api_key: str, timeout: float = _REMOTE_TIMEOUT):
         invalid_url = "AI_MVP_REMOTE_BASE_URL must be an HTTPS origin with an optional /v1 path"
@@ -161,10 +182,7 @@ class OpenAICompatibleModel:
             raise ValueError(invalid_url)
         if not model or any(char.isspace() for char in model):
             raise ValueError("AI_MVP_REMOTE_MODEL must name a model")
-        if not api_key or any(not 33 <= ord(char) <= 126 for char in api_key):
-            raise ValueError("The remote API key must contain printable ASCII characters without spaces")
-        if not 1 <= timeout <= 120:
-            raise ValueError("AI_MVP_REMOTE_TIMEOUT_SECONDS must be between 1 and 120")
+        _validate_remote_config(api_key, timeout)
         self.host = endpoint.hostname
         self.port = port if port is not None else 443
         self.model = model
@@ -178,8 +196,11 @@ class OpenAICompatibleModel:
             "model": self.model,
             "messages": _messages(system, user),
             "stream": False,
-            "max_tokens": 320,
         }
+        if self.host == _OPENAI_HOST and self.port == 443:
+            payload.update(max_completion_tokens=320, store=False)
+        else:
+            payload["max_tokens"] = 320
         if self.host == _DEEPSEEK_HOST and self.port == 443:
             payload["thinking"] = {"type": "disabled"}
         result = _request_json(
@@ -188,7 +209,7 @@ class OpenAICompatibleModel:
             "POST",
             _CHAT_COMPLETIONS,
             payload,
-            self._api_key,
+            auth_headers={"Authorization": f"Bearer {self._api_key}"},
         )
         choices = result.get("choices")
         if not isinstance(choices, list) or not choices or not isinstance(choices[0], dict):
@@ -196,14 +217,44 @@ class OpenAICompatibleModel:
         choice = choices[0]
         message = choice.get("message")
         content = message.get("content") if isinstance(message, dict) else None
-        if (
-            choice.get("finish_reason") not in (None, "stop")
-            or not isinstance(content, str)
-            or not content.strip()
-            or self._api_key in content
-        ):
+        if choice.get("finish_reason") not in (None, "stop"):
             raise ModelUnavailable("The remote model returned no final answer")
-        return content.strip()
+        return _remote_text(content, self._api_key)
+
+
+class GeminiModel:
+    model = _REMOTE_PROVIDERS["gemini"]["model"]
+
+    def __init__(self, api_key: str, timeout: float = _REMOTE_TIMEOUT):
+        _validate_remote_config(api_key, timeout)
+        self._api_key = api_key
+        self.timeout = timeout
+
+    def generate(self, system: str, user: str) -> str:
+        connection = HTTPSConnection(_GEMINI_HOST, 443, timeout=self.timeout)
+        result = _request_json(
+            connection,
+            "Gemini",
+            "POST",
+            f"/v1beta/models/{self.model}:generateContent",
+            {
+                "systemInstruction": {"parts": [{"text": system}]},
+                "contents": [{"role": "user", "parts": [{"text": user}]}],
+                "generationConfig": {"maxOutputTokens": 512, "thinkingConfig": {"thinkingLevel": "MINIMAL"}},
+            },
+            auth_headers={"x-goog-api-key": self._api_key},
+        )
+        candidates = result.get("candidates")
+        if not isinstance(candidates, list) or not candidates or not isinstance(candidates[0], dict):
+            raise ModelUnavailable("The remote model returned no final answer")
+        candidate = candidates[0]
+        content = candidate.get("content")
+        parts = content.get("parts") if isinstance(content, dict) else None
+        if candidate.get("finishReason") != "STOP" or not isinstance(parts, list):
+            raise ModelUnavailable("The remote model returned no final answer")
+        answer = "".join(part["text"] for part in parts
+                         if isinstance(part, dict) and not part.get("thought") and isinstance(part.get("text"), str))
+        return _remote_text(answer, self._api_key)
 
 
 def _timeout_from_environment(name: str, default: float) -> float:
@@ -250,7 +301,7 @@ def model_options(local, remote):
         ollama = {"status": "ready", "models": probe.installed_models()}
     except (ModelUnavailable, ValueError):
         ollama = {"status": "unavailable", "models": []}
-    return {"ollama": ollama, "deepseek_model": _DEFAULT_REMOTE_MODEL,
+    return {"ollama": ollama, "deepseek_model": _DEFAULT_REMOTE_MODEL, "remote_providers": _REMOTE_PROVIDERS,
             "startup": {"local": local.model if local else None, "remote": remote.model if remote else None}}
 
 
@@ -265,12 +316,16 @@ def session_model(settings):
         if not isinstance(model_name, str) or not 1 <= len(model_name.strip()) <= 160:
             raise ValueError("Select an installed Ollama model")
         return provider, from_environment(model_name=model_name)
-    if provider == "deepseek":
+    if isinstance(provider, str) and provider in _REMOTE_PROVIDERS:
         api_key = settings.get("api_key")
         if not isinstance(api_key, str) or not 1 <= len(api_key.strip()) <= 512:
-            raise ValueError("Enter a valid DeepSeek API key")
+            raise ValueError("Enter a valid API key for the selected provider")
         if settings.get("allow_billing") is not True:
-            raise ValueError("Confirm DeepSeek usage-based billing")
+            raise ValueError("Confirm the selected provider's API billing terms")
         timeout = _timeout_from_environment("AI_MVP_REMOTE_TIMEOUT_SECONDS", _REMOTE_TIMEOUT)
-        return provider, OpenAICompatibleModel(_DEFAULT_REMOTE_MODEL, _DEFAULT_REMOTE_URL, api_key.strip(), timeout)
+        api_key = api_key.strip()
+        if provider == "gemini":
+            return provider, GeminiModel(api_key, timeout)
+        url = _DEFAULT_REMOTE_URL if provider == "deepseek" else f"https://{_OPENAI_HOST}/v1"
+        return provider, OpenAICompatibleModel(_REMOTE_PROVIDERS[provider]["model"], url, api_key, timeout)
     raise ValueError("Unsupported model provider")

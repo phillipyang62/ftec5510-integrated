@@ -38,7 +38,11 @@ python -m ai_mvp --ollama-model qwen3.5:9b-q4_K_M
 
 也可通过 `AI_MVP_OLLAMA_MODEL` 设置模型名。连接默认使用 `http://127.0.0.1:11434`，可用 `AI_MVP_OLLAMA_URL` 指定回环地址。默认超时为 90 秒，可用 `AI_MVP_OLLAMA_TIMEOUT_SECONDS` 调整。可以运行 `python -X utf8 -m ai_mvp.demo --require-local-model` 验证本地模型是否实际生成了回复。
 
-### DeepSeek API
+### 第三方 API 模型
+
+联调页面的「模型设置」支持 DeepSeek、OpenAI 和 Gemini。选择平台后填写其 API Key，并确认该平台的用量计费规则。聊天服务使用对应的官方接口。命令行启动 AI 服务时，远程通道按下面的 DeepSeek 或兼容网关配置使用。
+
+### DeepSeek 命令行配置
 
 远程通道默认使用 DeepSeek 官方接口和 `deepseek-flash`。DeepSeek Key 放在服务端环境变量 `DEEPSEEK_API_KEY`。DeepSeek API 由 DeepSeek 按 token 单独计费。[DeepSeek API 文档](https://api-docs.deepseek.com/) · [DeepSeek 定价](https://api-docs.deepseek.com/quick_start/pricing/)
 
