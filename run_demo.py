@@ -21,13 +21,14 @@ from ai_mvp.models import from_environment, remote_from_environment
 from ai_mvp.profiles import ProfileStore
 from ai_mvp.providers import HttpMarketProvider, HttpTradingProvider, QuoteBook
 from ai_mvp.server import ApiServer
-from middle_office.public_market import PROVIDERS, QUOTE_MAX_AGE, PublicMarketFeed
+from middle_office.public_market import PROVIDER_MARKETS, QUOTE_MAX_AGE, PublicMarketFeed
 from middle_office.service import MiddleOffice
 from middle_office.server import Server
 from middle_office.validation import iso
 
 
 HOST = "127.0.0.1"
+DEMO_PRODUCT_RISKS = {"BTC/USDT": 4, "ETH/USDT": 3, "SOL/USDT": 5}
 ASSESSMENT = {
     "questionnaire_version": "1.0.0",
     "source": "questionnaire",
@@ -70,8 +71,10 @@ def demo_stack(*, ui_port=None, ollama_model=None, enable_deepseek=False, live_m
     with TemporaryDirectory(prefix="harbor-invest-") as directory, ExitStack() as resources:
         db = Path(directory)
         operator, reader, ai_token = (token_urlsafe(24) for _ in range(3))
+        sources = PROVIDER_MARKETS if live_market else {}
         office = MiddleOffice(db / "ledger.sqlite3", max_quote_age=QUOTE_MAX_AGE if live_market else 120,
-                              public_sources=PROVIDERS if live_market else ())
+                              public_sources=sources, public_source_pairs=sources,
+                              product_risks=DEMO_PRODUCT_RISKS, suitability_advisory=True)
         server = Server((HOST, 0), office, token=operator, read_token=reader)
         middle_url = start_server(resources, server)
         middle = JsonService("middle_office", middle_url, operator)

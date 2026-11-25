@@ -15,13 +15,16 @@ DEFAULT_LIMITS = {"max_order_notional": "100000", "concentration_pct": "60", "lo
 
 
 class MiddleOffice:
-    def __init__(self, db_path, *, clock=None, max_quote_age=120, product_risks=None, public_sources=()):
+    def __init__(self, db_path, *, clock=None, max_quote_age=120, product_risks=None, public_sources=(),
+                 suitability_advisory=False, public_source_pairs=None):
         self.store = Store(db_path)
         self.clock = clock or (lambda: datetime.now(timezone.utc))
         require(type(max_quote_age) is int and max_quote_age > 0, "invalid_config", "max_quote_age must be positive")
         self.max_quote_age = max_quote_age
         self.public_sources = frozenset(public_sources)
+        self.public_source_pairs = public_source_pairs or {}
         self.product_risks = product_risks or {}
+        self.suitability_advisory = suitability_advisory
         require(isinstance(self.product_risks, dict), "invalid_product_risks", "product risk map must be an object")
         require(all(pair(k) == k and type(v) is int and 1 <= v <= 5 for k, v in self.product_risks.items()),
                 "invalid_product_risks", "map normalized pairs to demo risk levels 1-5")
@@ -269,7 +272,9 @@ class MiddleOffice:
             else:
                 venues.sort(key=lambda q: (D(q["total"]), q["source"]), reverse=side == "sell")
             eligible = [q for q in venues if q["quantity_covered"] is not False]
-            missing = self.public_sources - {q["source"] for q in venues} - set(excluded)
+            expected = {source for source in self.public_sources
+                        if symbol in self.public_source_pairs.get(source, (symbol,))}
+            missing = expected - {q["source"] for q in venues} - set(excluded)
             return {"symbol": symbol, "side": side, "quantity": amount(qty), "mode": "simulation",
                     "market_mode": "public" if self.public_sources else "simulation",
                     "venues": venues, "excluded_sources": sorted(excluded), "missing_sources": sorted(missing),
@@ -304,8 +309,8 @@ class MiddleOffice:
                 "limit_price": amount(limit) if limit else None, "source": venue}
 
     def _order_quote(self, state, account, terms):
-        self._check_suitability(account, terms)
-        return self._execution_quote(state, terms)
+        warning = self._check_suitability(account, terms)
+        return self._execution_quote(state, terms), warning
 
     def _check_order(self, state, account, user, terms, quote):
         qty, side, symbol = D(terms["quantity"]), terms["side"], terms["symbol"]
@@ -334,8 +339,10 @@ class MiddleOffice:
         terms = self._order_terms(payload)
         with self.store.transaction() as state:
             account = self._account(state, user)
-            quote = self._order_quote(state, account, terms)
+            quote, warning = self._order_quote(state, account, terms)
             estimate = self._check_order(state, account, user, terms, quote)
+        if warning:
+            estimate["suitability_warning"] = warning
         return {**terms, **estimate, "mode": "simulation"}
 
     def place_order(self, user, payload):
@@ -354,9 +361,11 @@ class MiddleOffice:
                      "status": "open", "reserved_cash": "0", "reason": None,
                      "fingerprint": fingerprint, "created_at": iso(self.clock()), "updated_at": iso(self.clock())}
             try:
-                quote = self._order_quote(state, account, terms)
+                quote, warning = self._order_quote(state, account, terms)
                 order.update(source=quote["source"], fee_rate=quote["fee_rate"] or "0")
                 estimate = self._check_order(state, account, user, terms, quote)
+                if warning:
+                    order["suitability_warning"] = warning
                 if terms["side"] == "buy":
                     order["reserved_cash"] = estimate["total"]
             except BusinessError as error:
@@ -373,14 +382,20 @@ class MiddleOffice:
                 "currency_mismatch", "order quote currency must match account valuation currency", 409)
         if order["side"] != "buy":
             return
-        record = account["assessment"]
-        if record:
-            require(not record["assessment"]["prohibitions"], "assessment_prohibition", "upstream assessment prohibits new buys", 409)
+        assessment = account["assessment"]["assessment"] if account["assessment"] else {}
         risk = self.product_risks.get(order["symbol"])
-        if risk is not None:
-            require(record is not None, "assessment_required", "this configured product requires an assessment", 409)
-            cap = int(record["assessment"]["product_cap"][1])
-            require(risk <= cap, "product_cap", "product exceeds questionnaire risk cap", 409)
+        cap = assessment.get("product_cap")
+        if assessment.get("prohibitions"):
+            code, message = "assessment_prohibition", "upstream assessment prohibits new buys"
+        elif not assessment and (risk is not None or self.suitability_advisory):
+            code, message = "assessment_required", "this configured product requires an assessment"
+        elif risk is not None and cap and risk > int(cap[1]):
+            code, message = "product_cap", "product exceeds questionnaire risk cap"
+        else:
+            return
+        require(self.suitability_advisory, code, message, 409)
+        return {"code": code, "risk_level": assessment.get("risk_level"), "product_cap": cap,
+                "product_risk": f"R{risk}" if risk is not None else None}
 
     def _execution_quote(self, state, order):
         candidates = [q for q in state["quotes"].values() if q["symbol"] == order["symbol"]

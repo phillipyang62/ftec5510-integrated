@@ -197,6 +197,17 @@
             <button class="da-chip" type="button" data-choice-group="compare-asset">SOL</button>
             <button class="da-chip" type="button" data-choice-group="compare-asset">稳定币理财</button>
           </div>
+          <label class="da-quote-pair" id="public-pair-filter" hidden>
+            <span>现货交易对</span>
+            <select id="public-pair">
+              <option value="">USDT（随所选币种）</option>
+              <option>BTC/USD</option>
+              <option>ETH/USD</option>
+              <option>SOL/USD</option>
+              <option>BTC/HKD</option>
+              <option>ETH/HKD</option>
+            </select>
+          </label>
           <span class="da-fresh">实时 · 14:32:08</span>
         </div>
 
@@ -485,6 +496,7 @@
               </div>
             </div>
 
+            <p class="da-order-risk" id="order-risk-notice" role="status" hidden></p>
             <button class="da-primary da-submit" id="submit-order" type="button">确认买入 BTC</button>
             <p class="da-order-note">提交后将跳转至订单确认页，需再次核对可成交价格与费用。</p>
           </article>
@@ -1201,6 +1213,28 @@
   .da-chips {
     display: flex;
     gap: 5px;
+  }
+
+  .da-quote-pair {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--da-muted);
+    font-size: 12px;
+  }
+
+  .da-quote-pair[hidden] {
+    display: none;
+  }
+
+  .da-quote-pair select {
+    min-height: 32px;
+    border: 1px solid var(--da-line);
+    border-radius: 8px;
+    padding: 4px 6px;
+    background: var(--da-surface);
+    color: var(--da-ink);
+    font: inherit;
   }
 
   .da-chip {
@@ -1932,6 +1966,15 @@
 
   .da-precheck span {
     font-size: 8px;
+  }
+
+  .da-order-risk {
+    margin: 0 15px 10px;
+    padding: 9px 10px;
+    border-inline-start: 3px solid currentColor;
+    background: var(--da-surface);
+    color: var(--da-warning);
+    font-size: 12px;
   }
 
   .da-submit {

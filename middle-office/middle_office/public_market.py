@@ -1,26 +1,38 @@
-"""Poll public spot tickers. Orders and credentials are outside this feed."""
+"""Collect public spot quotes without exchange-account credentials."""
 
 import json
 import logging
 from datetime import datetime, timezone
+from decimal import Decimal, InvalidOperation
 from email.utils import parsedate_to_datetime
 from http.client import HTTPException
 from threading import Event, Lock, Thread
+from time import monotonic
 from urllib.parse import urlencode
 from urllib.request import Request, build_opener
 
 from .market import NoRedirect
-from .validation import BusinessError, iso
+from .validation import BusinessError, amount, iso, number
 
 
-MARKETS = {
-    "BTC/USDT": ("Bitcoin", ["比特币", "XBT", "BTCUSDT"]),
-    "ETH/USDT": ("Ethereum", ["以太坊", "以太币", "ETHUSDT"]),
-    "SOL/USDT": ("Solana", ["索拉纳", "SOLUSDT"]),
+ASSETS = {
+    "BTC": ("Bitcoin", ["比特币", "XBT"]),
+    "ETH": ("Ethereum", ["以太坊", "以太币"]),
+    "SOL": ("Solana", ["索拉纳"]),
 }
-BINANCE_PAIRS = {symbol.replace("/", ""): symbol for symbol in MARKETS}
-OKX_PAIRS = {symbol.replace("/", "-"): symbol for symbol in MARKETS}
+USDT_PAIRS = ("BTC/USDT", "ETH/USDT", "SOL/USDT")
+HK_PAIRS = ("BTC/USD", "ETH/USD", "SOL/USD", "BTC/HKD", "ETH/HKD")
+PROVIDER_MARKETS = {
+    "Binance": USDT_PAIRS, "OKX": USDT_PAIRS, "Kraken": USDT_PAIRS,
+    "HashKey": (*HK_PAIRS, "BTC/USDT", "ETH/USDT"), "OSL": HK_PAIRS,
+}
+BINANCE_PAIRS = {symbol.replace("/", ""): symbol for symbol in USDT_PAIRS}
+OKX_PAIRS = {symbol.replace("/", "-"): symbol for symbol in USDT_PAIRS}
 KRAKEN_PAIRS = {"XBTUSDT": "BTC/USDT", "ETHUSDT": "ETH/USDT", "SOLUSDT": "SOL/USDT"}
+HASHKEY_PAIRS = {symbol.replace("/", ""): symbol for symbol in PROVIDER_MARKETS["HashKey"]}
+OSL_PAIRS = {symbol.replace("/", ""): symbol for symbol in HK_PAIRS}
+HASHKEY_BASE = "https://api-pro.hashkey.com/quote/v1/ticker/"
+OSL_PUBLIC_STREAM = "wss://stream-hk.osl.com/ws/v5/public"
 BINANCE_QUERY = urlencode({"symbols": json.dumps(list(BINANCE_PAIRS), separators=(",", ":"))})
 KRAKEN_QUERY = urlencode({"pair": ",".join(KRAKEN_PAIRS)})
 LOG = logging.getLogger(__name__)
@@ -33,10 +45,10 @@ def _from_milliseconds(value):
 
 
 def _quote(symbol, venue, price, bid, ask, bid_size, ask_size, at, timestamp_source):
-    name, aliases = MARKETS[symbol]
+    name, aliases = ASSETS[symbol.split("/")[0]]
     return {"symbol": symbol, "source": venue, "price": price, "bid": bid, "ask": ask,
             "bid_size": bid_size, "ask_size": ask_size, "as_of": iso(at), "timestamp_source": timestamp_source,
-            "fee_rate": None, "name": name, "aliases": aliases}
+            "fee_rate": None, "name": name, "aliases": [*aliases, symbol.replace("/", "")]}
 
 
 def _binance(payload, received):
@@ -62,11 +74,77 @@ def _kraken(payload, received):
             for key, row in payload["result"].items() if key in KRAKEN_PAIRS]
 
 
-PROVIDERS = {
+HTTP_PROVIDERS = {
     "Binance": ("https://data-api.binance.vision/api/v3/ticker/24hr?" + BINANCE_QUERY, _binance),
     "OKX": ("https://www.okx.com/api/v5/market/tickers?instType=SPOT", _okx),
     "Kraken": ("https://api.kraken.com/0/public/Ticker?" + KRAKEN_QUERY, _kraken),
 }
+
+
+def _hk_quote(symbol, venue, values, timestamp):
+    fields = ("price", "bid", "ask", "bid_size", "ask_size")
+    try:
+        price, bid, ask, bid_size, ask_size = (
+            number(Decimal(str(value)).normalize(), field, positive=True)
+            for field, value in zip(fields, values)
+        )
+        at = _from_milliseconds(timestamp)
+    except (BusinessError, InvalidOperation, ValueError, TypeError, OSError, OverflowError):
+        return None
+    if bid > ask:
+        return None
+    return _quote(symbol, venue, amount(price), amount(bid), amount(ask),
+                  amount(bid_size), amount(ask_size), at, "exchange")
+
+
+def _hashkey(fetch):
+    books, _ = fetch(HASHKEY_BASE + "bookTicker?site=HK")
+    tickers, _ = fetch(HASHKEY_BASE + "price?site=HK")
+    prices = {row["s"]: row["p"] for row in tickers}
+    quotes = []
+    for row in books:
+        key = row.get("s")
+        if key in HASHKEY_PAIRS and key in prices:
+            values = (prices[key], row.get("b"), row.get("a"), row.get("bq"), row.get("aq"))
+            quote = _hk_quote(HASHKEY_PAIRS[key], "HashKey", values, row.get("t"))
+            if quote:
+                quotes.append(quote)
+    return quotes
+
+
+def _osl(stop_event):
+    from websockets.exceptions import WebSocketException
+    from websockets.sync.client import connect
+
+    subscription = {"op": "subscribe", "args": [
+        {"instType": "SPOT", "channel": "ticker", "instId": key} for key in OSL_PAIRS
+    ]}
+    quotes = {}
+    try:
+        with connect(OSL_PUBLIC_STREAM, open_timeout=4, close_timeout=1, max_size=65536) as stream:
+            stream.send(json.dumps(subscription))
+            deadline = monotonic() + 4
+            while len(quotes) < len(OSL_PAIRS) and not stop_event.is_set():
+                remaining = deadline - monotonic()
+                if remaining <= 0:
+                    break
+                try:
+                    message = json.loads(stream.recv(timeout=remaining))
+                except TimeoutError:
+                    break
+                if (message.get("arg") or {}).get("channel") != "ticker":
+                    continue
+                for row in message.get("data", []):
+                    symbol = OSL_PAIRS.get(row.get("instId"))
+                    if symbol:
+                        values = tuple(row.get(key) for key in ("lastPr", "bidPr", "askPr", "bidSz", "askSz"))
+                        quote = _hk_quote(symbol, "OSL", values, row.get("ts"))
+                        if quote:
+                            quotes[symbol] = quote
+    except WebSocketException as error:
+        if not quotes:
+            raise OSError("OSL public ticker connection failed") from error
+    return list(quotes.values())
 
 
 def _fetch(url):
@@ -92,17 +170,24 @@ class PublicMarketFeed:
         self.fetch = fetch
         self.stop_event = Event()
         self.lock = Lock()
-        self.status = {name: {"state": "starting"} for name in PROVIDERS}
-        self.threads = [Thread(target=self._run, args=(name,), daemon=True) for name in PROVIDERS]
+        self.status = {name: {"state": "starting"} for name in PROVIDER_MARKETS}
+        self.threads = [Thread(target=self._run, args=(name,), daemon=True) for name in PROVIDER_MARKETS]
 
     def snapshot(self):
         with self.lock:
             return self.status.copy()
 
     def poll(self, name):
-        url, decode = PROVIDERS[name]
-        payload, received = self.fetch(url)
-        quotes = decode(payload, received)
+        if name == "HashKey":
+            quotes = _hashkey(self.fetch)
+        elif name == "OSL":
+            quotes = _osl(self.stop_event)
+        else:
+            url, decode = HTTP_PROVIDERS[name]
+            payload, received = self.fetch(url)
+            quotes = decode(payload, received)
+        if self.stop_event.is_set():
+            return []
         statuses = {row["symbol"] for row in quotes if self.office._fresh(row)}
         if not statuses:
             raise ValueError("No current tracked quotes")
@@ -114,10 +199,15 @@ class PublicMarketFeed:
         while not self.stop_event.is_set():
             try:
                 pairs = self.poll(name)
-                result = {"state": "ok" if len(pairs) == len(MARKETS) else "partial", "pairs": pairs}
+                result = {"state": "ok" if len(pairs) == len(PROVIDER_MARKETS[name]) else "partial", "pairs": pairs}
                 failures = 0
+            except ModuleNotFoundError:
+                LOG.warning("OSL public feed requires the optional requirements-live.txt dependency")
+                with self.lock:
+                    self.status[name] = {"state": "dependency_missing", "checked_at": iso(datetime.now(timezone.utc))}
+                return
             except (OSError, HTTPException, ValueError, OverflowError, KeyError, TypeError, IndexError,
-                    RecursionError, BusinessError) as error:
+                    RecursionError, AttributeError, BusinessError) as error:
                 LOG.warning("Public market feed %s unavailable (%s)", name, type(error).__name__)
                 result = {"state": "unavailable"}
                 failures += 1

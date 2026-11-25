@@ -155,6 +155,8 @@ GET /api/market/venues?symbol=BTC%2FUSDT&quantity=0.5&side=buy
 
 ### 订单预览
 
+模拟订单预览和提交可选返回 `suitability_warning`，字段为 `code`、`risk_level`、`product_cap`、`product_risk`。前端在确认按钮前展示提醒。预览成功后仍可确认提交。
+
 ```http
 POST /api/orders/preview
 ```

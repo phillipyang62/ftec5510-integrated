@@ -120,6 +120,7 @@
       const data = await response.json();
       if (!response.ok) throw new Error(data.error?.message || `HTTP ${response.status}`);
       result = data;
+      document.dispatchEvent(new Event("harbor-assessment-updated"));
       showResult();
     } catch (error) {
       status.textContent = label(`提交失败 · ${error.message}`, `Submission failed · ${error.message}`);

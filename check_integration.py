@@ -2,6 +2,7 @@
 
 import argparse
 from decimal import Decimal
+from importlib.util import find_spec
 from http.cookiejar import CookieJar
 import json
 from time import monotonic, sleep
@@ -10,6 +11,7 @@ from urllib.parse import urlencode
 from urllib.request import HTTPCookieProcessor, Request, build_opener, urlopen
 
 from run_demo import ASSESSMENT, demo_stack
+from middle_office.public_market import HK_PAIRS, USDT_PAIRS
 
 
 USER = "student_demo"
@@ -160,6 +162,31 @@ def derived_profile_api(ui, middle, ai):
     assert checked(ui, "PUT", "/api/profile", {"assessment": {}}, expected=400)["error"]["code"] == "invalid_assessment"
 
 
+def check_suitability_warnings(url):
+    ui = BrowserClient(url)
+    checked(ui, "POST", "/api/session", {"account_name": "student_risk_notice"})
+    buy = {"symbol": "BTC/USDT", "side": "buy", "quantity": "0.01", "order_type": "market"}
+    preview = checked(ui, "POST", "/api/orders/preview", buy)
+    missing = {"code": "assessment_required", "risk_level": None, "product_cap": None, "product_risk": "R4"}
+    assert preview["suitability_warning"] == missing
+    filled = checked(ui, "POST", "/api/orders", {"preview_id": preview["preview_id"]})
+    assert filled["status"] == "filled" and filled["suitability_warning"] == missing
+
+    checked(ui, "PUT", "/api/profile", ASSESSMENT)
+    limit = {**buy, "order_type": "limit", "limit_price": "65000"}
+    preview = checked(ui, "POST", "/api/orders/preview", limit)
+    excess = {"code": "product_cap", "risk_level": "C3", "product_cap": "R3", "product_risk": "R4"}
+    assert preview["suitability_warning"] == excess
+    pending = checked(ui, "POST", "/api/orders", {"preview_id": preview["preview_id"]})
+    assert pending["status"] == "open" and pending["suitability_warning"] == excess
+    within_cap = checked(ui, "POST", "/api/orders/preview", {**buy, "symbol": "ETH/USDT"})
+    assert "suitability_warning" not in within_cap
+
+    revised = {**ASSESSMENT, "assessment": {**ASSESSMENT["assessment"], "rai": 66, "risk_level": "C4", "product_cap": "R4"}}
+    checked(ui, "PUT", "/api/profile", revised)
+    assert "suitability_warning" not in checked(ui, "POST", "/api/orders/preview", buy)
+
+
 def trade(ui):
     buy = {"symbol": "BTC/USDT", "side": "buy", "quantity": "0.01", "order_type": "market"}
     before = checked(ui, "GET", "/api/account/summary")
@@ -202,6 +229,9 @@ def offline_checks():
         derived_profile_api(ui, middle, ai)
         print("PASS questionnaire scores and product cap persist in middle office and AI")
 
+        check_suitability_warnings(url)
+        print("PASS simulated buys remain available with assessment warnings, and updated grades change the warning")
+
         query = urlencode({"symbol": "BTC/USDT", "quantity": "0.01", "side": "buy"})
         venue_report = checked(ui, "GET", "/api/market/venues?" + query)
         assert venue_report["status"] == "ok" and len(venue_report["venues"]) == 2
@@ -242,33 +272,48 @@ def offline_checks():
         print("PASS logout, account switching, isolated balances, profiles, orders, previews and AI context")
 
 
+def live_comparison(ui, symbol, deadline, *, required_sources=(), minimum=2):
+    query = urlencode({"symbol": symbol, "quantity": "0.01", "side": "buy"})
+    while True:
+        report = checked(ui, "GET", "/api/market/venues?" + query)
+        sources = {quote["source"] for quote in report["venues"]}
+        if len(sources) >= minimum and sources.issuperset(required_sources):
+            break
+        if monotonic() >= deadline:
+            raise AssertionError(f"Incomplete live quotes for {symbol}: {report}")
+        sleep(0.6)
+    assert report["market_mode"] == "public" and report["ranking_basis"] == "bid_ask_excluding_fees"
+    for quote in report["venues"]:
+        assert quote["quote_currency"] == symbol.split("/")[1] and quote["fee_rate"] is None
+        assert quote["total"] is None and Decimal(quote["ask"]) >= Decimal(quote["bid"]) > 0 and quote["as_of"]
+    assert not (set(report["missing_sources"]) & set(required_sources))
+    print(f"PASS public {symbol}: " + ", ".join(sorted(sources)))
+
+
 def live_checks():
-    pairs = ("BTC/USDT", "ETH/USDT", "SOL/USDT")
     with demo_stack(ui_port=0, live_market=True) as (middle, ai, _, url):
         ui = BrowserClient(url)
         check_html(url)
         check_sign_in(ui)
         questionnaire_form(ui, middle, ai)
         deadline = monotonic() + 22
-        for symbol in pairs:
-            query = urlencode({"symbol": symbol, "quantity": "0.01", "side": "buy"})
-            while True:
-                report = checked(ui, "GET", "/api/market/venues?" + query)
-                if len(report["venues"]) >= 2:
-                    break
-                if monotonic() >= deadline:
-                    raise AssertionError(f"Expected at least two current venues for {symbol}: {report}")
-                sleep(0.6)
-            assert report["market_mode"] == "public" and report["ranking_basis"] == "bid_ask_excluding_fees"
-            for quote in report["venues"]:
-                assert quote["quote_currency"] == "USDT" and quote["fee_rate"] is None and quote["total"] is None
-                assert Decimal(quote["ask"]) >= Decimal(quote["bid"]) > 0 and quote["as_of"]
-            print(f"PASS public {symbol}: " + ", ".join(quote["source"] for quote in report["venues"]))
+        for symbol in USDT_PAIRS:
+            live_comparison(ui, symbol, deadline)
+        hk_sources = {"HashKey", "OSL"} if find_spec("websockets") else {"HashKey"}
+        if "OSL" not in hk_sources:
+            print("SKIP OSL comparison (install requirements-live.txt)")
+        for symbol in HK_PAIRS:
+            live_comparison(ui, symbol, deadline, required_sources=hk_sources, minimum=len(hk_sources))
 
         chat = checked(ui, "POST", "/api/assistant/chat", {"message": "比较 BTC/USDT 的报价", "market_queries": ["BTC/USDT"]})
         assert len([row for row in chat["market"][0]["venues"] if row["freshness"] == "fresh"]) >= 2
         assert "多来源买卖报价" in chat["reply"]
         print("PASS live venue quotes reach the assistant through middle office")
+        if "OSL" in hk_sources:
+            hk_chat = checked(ui, "POST", "/api/assistant/chat", {"message": "比较 BTC/HKD 的报价", "market_queries": ["BTC/HKD"]})
+            venues = {row["source"] for row in hk_chat["market"][0]["venues"] if row["freshness"] == "fresh"}
+            assert venues == hk_sources
+            print("PASS the assistant reads both Hong Kong venues in HKD")
 
 
 def main():

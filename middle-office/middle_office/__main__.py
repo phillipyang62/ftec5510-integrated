@@ -3,7 +3,7 @@ import json
 import os
 
 from .market import MarketFeed
-from .public_market import PROVIDERS, QUOTE_MAX_AGE, PublicMarketFeed
+from .public_market import PROVIDER_MARKETS, QUOTE_MAX_AGE, PublicMarketFeed
 from .service import MiddleOffice
 from .server import Server
 
@@ -16,8 +16,9 @@ def main():
     parser.add_argument("--quote-max-age", type=int)
     parser.add_argument("--market-url", default=os.getenv("MO_MARKET_URL"), help="upstream quote URL returning {quotes:[...]}")
     parser.add_argument("--market-interval", type=int, default=5)
-    parser.add_argument("--public-market", action="store_true", help="poll public Binance, OKX, and Kraken spot tickers")
+    parser.add_argument("--public-market", action="store_true", help="collect public exchange spot quotes")
     parser.add_argument("--product-risks", help='JSON file mapping pairs to agreed demo risk levels, e.g. {"BTC/USDT": 5}')
+    parser.add_argument("--suitability-advisory", action="store_true", help="report assessment warnings on simulated buys")
     args = parser.parse_args()
     risks = {}
     if args.product_risks:
@@ -27,8 +28,10 @@ def main():
         parser.error("choose --public-market or a custom market URL")
     database = args.db or (".middle_office/public-ledger.sqlite3" if args.public_market else ".middle_office/ledger.sqlite3")
     quote_age = args.quote_max_age if args.quote_max_age is not None else (QUOTE_MAX_AGE if args.public_market else 120)
-    office = MiddleOffice(database, max_quote_age=quote_age, product_risks=risks,
-                          public_sources=PROVIDERS if args.public_market else ())
+    sources = PROVIDER_MARKETS if args.public_market else {}
+    office = MiddleOffice(database, max_quote_age=quote_age, product_risks=risks, public_sources=sources,
+                          public_source_pairs=sources,
+                          suitability_advisory=args.suitability_advisory)
     server = Server((args.host, args.port), office, token=os.getenv("MO_API_TOKEN"), read_token=os.getenv("MO_AI_READ_TOKEN"))
     feed = None
     if args.public_market:

@@ -82,7 +82,7 @@ python -m middle_office --market-url http://127.0.0.1:8300/quotes --market-inter
 
 上游返回 `{ "quotes": [...] }`，字段见 API 文档。`MO_MARKET_TOKEN` 为可选上游 Bearer 凭证。服务保留采集时间，上游失败时旧报价按原时间自然过期。
 
-使用 `python -m middle_office --public-market` 可独立轮询 Binance、OKX、Kraken 的公开现货 ticker，无需 API Key。公开模式默认使用单独的 SQLite 文件，行情保鲜期为 45 秒。比价以买卖一档参考价排序并标注该档数量，成交和费用仍按模拟规则记账。[来源和启动方式](../README.md#问卷与行情来源)
+使用 `python -m middle_office --public-market` 连接 Binance、OKX、Kraken、HashKey 香港站和 OSL 香港站的公开现货行情，无需 API Key。OSL 的公开 WebSocket 使用仓库根目录 `requirements-live.txt` 中的可选客户端。公开模式默认使用单独的 SQLite 文件，行情保鲜期为 45 秒。比价按同一交易对的买卖一档排序并标注该档数量。[来源和启动方式](../README.md#问卷与行情来源)
 
 ## 原型范围
 
