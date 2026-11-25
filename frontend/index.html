@@ -81,7 +81,30 @@
     .da-question-panel legend { margin-bottom: 8px; font-weight: 650; }
     .da-question-panel label { display: flex; gap: 8px; align-items: start; margin: 8px 0; }
     .da-question-panel .da-question-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
-    .da-question-panel .da-question-status { min-height: 1.4em; }
+    .da-question-status:empty { margin: 0; }
+    .da-assessment-summary {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px 28px;
+      margin: 16px 0;
+    }
+    .da-assessment-summary dt { color: var(--da-muted); font-size: 13px; }
+    .da-assessment-summary dd { margin: 3px 0 0; font-size: 20px; font-weight: 650; }
+    .da-assessment-details { color: var(--da-muted); font-size: 13px; }
+    .da-assessment-details summary { cursor: pointer; width: fit-content; }
+    .da-learning { display: grid; gap: 10px; padding: 18px; margin-bottom: 12px; }
+    .da-learning[hidden] { display: none; }
+    .da-learning h2, .da-learning p { margin: 0; }
+    .da-learning-focus { color: var(--da-muted); font-size: 13px; }
+    .da-learning-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+    body[data-integrated] .da-messages { min-height: 0; }
+    body[data-integrated] .da-messages:empty { display: none; }
+    body[data-integrated] .da-precheck span { font-size: 12px; }
+    body[data-integrated] .da-field-row:has(.da-field[hidden]) { grid-template-columns: minmax(0, 1fr); }
+    body[data-integrated] #digital-asset-ui .da-primary,
+    body[data-integrated] #digital-asset-ui .da-order-side button:is(.is-buy, .is-sell) {
+      color: light-dark(#ffffff, #061614);
+    }
   </style>
 </head>
 <body>
@@ -512,6 +535,16 @@
           </div>
           <span class="da-edu-badge"><i data-lucide="graduation-cap" aria-hidden="true"></i> 教育用途 · 不构成投资建议</span>
         </div>
+
+        <section class="da-panel da-learning" id="guided-lesson" aria-labelledby="lesson-title" hidden>
+          <h2 id="lesson-title" tabindex="-1">投教</h2>
+          <p class="da-learning-focus" id="lesson-focus" hidden></p>
+          <p id="lesson-content" role="status"></p>
+          <div class="da-learning-actions">
+            <button class="da-primary" type="button" id="lesson-trade" hidden>打开模拟下单页</button>
+            <button class="da-secondary" type="button" id="lesson-retry" hidden>重试加载投教</button>
+          </div>
+        </section>
 
         <div class="da-chat-layout">
           <article class="da-panel da-chat">
@@ -1968,7 +2001,7 @@
     font-size: 8px;
   }
 
-  .da-order-risk {
+  #digital-asset-ui .da-order-risk {
     margin: 0 15px 10px;
     padding: 9px 10px;
     border-inline-start: 3px solid currentColor;

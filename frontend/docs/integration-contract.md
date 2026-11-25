@@ -49,6 +49,10 @@ PUT /v1/profiles/{user_id}
 
 前端请求体不包含可任意伪造的 `user_id`。
 
+### 对应投教
+
+`GET /api/education` 由 BFF 按登录会话转发到 AI 的 `GET /v1/education/{user_id}`。返回中英文 `title`、`content`，以及可选的 `focus`（维度名称和分数）。有杠杆提示时优先展示杠杆风险，待复核时展示测评复核，基础投教展示订单类型，其他情况取当前画像最低分维度。接口按规则选课，不调用生成模型，未完成问卷时返回 `404 assessment_required`。
+
 ### AI 对话
 
 ```http

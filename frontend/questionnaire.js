@@ -52,7 +52,7 @@
   function questionField(question) {
     const group = document.createElement("fieldset");
     const title = document.createElement("legend");
-    title.textContent = `${question.id} · ${question.text}`;
+    title.textContent = question.text;
     group.append(title);
     for (const option of question.options) {
       const line = document.createElement("label");
@@ -81,17 +81,39 @@
 
   function showResult() {
     const assessment = result.assessment;
-    status.textContent = label("测评结果已同步到中台和 AI。", "Assessment synced to middle office and AI.");
+    status.textContent = "";
     const headline = document.createElement("h2");
-    headline.textContent = label(`风险等级 ${assessment.risk_level} · 产品上限 ${assessment.product_cap}`,
-      `Risk level ${assessment.risk_level} · Product ceiling ${assessment.product_cap}`);
+    headline.textContent = label("测评结果", "Assessment result");
+    const summary = document.createElement("dl");
+    summary.className = "da-assessment-summary";
+    for (const [name, value] of [
+      [label("综合分", "Overall score"), `${assessment.rai} / 100`],
+      [label("风险等级", "Risk level"), assessment.risk_level],
+      [label("产品上限", "Product ceiling"), assessment.product_cap],
+    ]) {
+      const item = document.createElement("div");
+      const term = document.createElement("dt");
+      const score = document.createElement("dd");
+      term.textContent = name;
+      score.textContent = value;
+      item.append(term, score);
+      summary.append(item);
+    }
+    const details = document.createElement("details");
+    details.className = "da-assessment-details";
+    const expand = document.createElement("summary");
+    expand.textContent = label("查看五维得分", "View all five scores");
     const scores = document.createElement("p");
     scores.textContent = Object.entries(assessment.dimensions)
       .map(([code, score]) => `${bank.dimensions[code]} ${score}`).join(" · ");
+    details.append(expand, scores);
     const actions = document.createElement("div");
     actions.className = "da-question-actions";
     actions.append(
-      button(label("去聊天", "Open assistant"), "da-primary", () => find('[data-screen-target="assistant"]').click()),
+      button(label("查看对应投教", "Open tailored lesson"), "da-primary", () => {
+        find('[data-screen-target="assistant"]').click();
+        document.dispatchEvent(new Event("harbor-education-requested"));
+      }),
       button(label("重新测评", "Retake"), "da-secondary", () => {
         result = null;
         answers.clear();
@@ -100,14 +122,14 @@
         render();
       }),
     );
-    body.replaceChildren(headline, scores, actions);
+    body.replaceChildren(headline, summary, details, actions);
   }
 
   async function save(form) {
     if (saving || !consent) return;
     saving = true;
     form.querySelectorAll("button, input").forEach((control) => { control.disabled = true; });
-    status.textContent = label("正在评分和同步…", "Scoring and syncing…");
+    status.textContent = label("正在评分…", "Scoring…");
     try {
       const response = await request("/api/questionnaire", {
         method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({
@@ -141,7 +163,7 @@
     const heading = document.createElement("h2");
     heading.textContent = `${step + 1}/${groups.length} · ${bank.dimensions[code]}`;
     form.append(heading, ...questions.map(questionField));
-    status.textContent = label("请按实际情况填写。提交后仅保存评分结果。", "Answer based on your situation. Only derived scores are saved.");
+    status.textContent = "";
     if (last) {
       const line = document.createElement("label");
       const check = document.createElement("input");
@@ -149,7 +171,7 @@
       check.required = true;
       check.checked = consent;
       check.addEventListener("change", () => { consent = check.checked; });
-      line.append(check, label("我同意用本次得分生成风险画像和 AI 解释。", "I agree to use the scores for my risk profile and AI explanations."));
+      line.append(check, label("同意用测评结果生成风险画像和投教内容。", "Use my scores for the risk profile and tailored lessons."));
       form.append(line);
     }
     const actions = document.createElement("div");
@@ -164,7 +186,7 @@
       event.preventDefault();
       const missing = questions.find(({ id }) => !answers.has(id));
       if (missing) {
-        status.textContent = label(`请先回答 ${missing.id}。`, `Please answer ${missing.id}.`);
+        status.textContent = label("请完成本组题目。", "Answer each question in this group.");
         form.elements.namedItem(missing.id)[0]?.focus();
       } else if (last) save(form);
       else { step++; render(); }
@@ -173,7 +195,7 @@
   }
 
   function localize() {
-    const title = label("风险问卷", "Risk questionnaire");
+    const title = label("风险测评", "Risk assessment");
     nav.querySelector("span").textContent = title;
     find("#questionnaire-title").textContent = title;
     if (!screen.hidden) render();

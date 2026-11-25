@@ -146,14 +146,14 @@
     "#screen-compare .da-headactions .da-primary, #screen-trade .da-headactions, .da-watchlist .da-iconbtn, " +
     ".da-watchlist-head, .da-watchfoot, .da-watchrow > :not(.da-asset), .da-quickamounts, " +
     ".da-order-summary > div:nth-child(3), .da-context-panel, #screen-account .da-headactions, " +
-    ".da-account-grid, .da-holdings .da-textbtn");
+    ".da-account-grid, .da-holdings .da-textbtn, .da-screen .da-pagehead p, " +
+    ".da-order-note, .da-order .da-panelhead p, .da-precheck strong, .da-chathead p, .da-chat-disclaimer, .da-prompts");
   bilingual(one(".da-status"), "模拟账户", "Simulation account");
-  bilingual(one("#screen-compare .da-pagehead p:not(.da-eyebrow)"), "比较同一交易对的买卖报价。", "Compare venues for the same trading pair.");
-  bilingual(one("#screen-trade .da-pagehead p:not(.da-eyebrow)"), "选择币种并预览或提交模拟订单。", "Select an asset, preview it, and place a simulated order.");
+  bilingual(one("#trade-title"), "模拟下单", "Simulated order");
+  bilingual(one('[data-screen-target="trade"] span'), "模拟下单", "Simulated order");
   bilingual(one(".da-watchlist h2"), "选择币种", "Choose an asset");
   hide(".da-watchlist .da-panelhead p");
-  bilingual(one("#screen-assistant .da-pagehead p:not(.da-eyebrow)"), "结合问卷结果、行情和模拟账户回答。", "Ask about your assessment, market quotes, or simulation account.");
-  bilingual(one("#screen-account .da-pagehead p:not(.da-eyebrow)"), "查看中台账本、持仓和挂单，以及 AI 风险指标。", "View the middle-office ledger, holdings, open orders, and AI risk metrics.");
+  bilingual(one(".da-edu-badge"), "课堂投教", "Classroom education");
   one(".da-railsummary button").addEventListener("click", () => navigate("account"));
 
   const pairs = ["BTC/USDT", "ETH/USDT", "SOL/USDT"];
@@ -168,6 +168,7 @@
   const amount = one("#order-amount");
   const kind = one("#order-type");
   const limit = one("#order-limit");
+  const limitField = limit.closest("label");
   const venue = one("#venue-select");
   const publicPairFilter = one("#public-pair-filter");
   const publicPair = one("#public-pair");
@@ -177,16 +178,16 @@
   const marketBody = one(".da-quote-panel tbody");
   const marketNotice = notice(one(".da-quote-panel"), "market-status");
   const orderNotice = one(".da-precheck span");
+  const orderStatus = orderNotice.closest(".da-precheck");
+  orderStatus.setAttribute("role", "status");
   const orderRisk = one("#order-risk-notice");
   const marketColumns = all(".da-quote-panel th");
   bilingual(marketColumns[1], "买入价（Ask）", "Ask");
   bilingual(marketColumns[2], "卖出价（Bid）", "Bid");
   bilingual(marketColumns[4], "报价时间（UTC）", "Quote time (UTC)");
-  bilingual(one(".da-order-note"), "确认后由中台按当时行情复核并模拟成交。", "Middle office rechecks the latest quote and executes in simulation.");
-  bilingual(one(".da-precheck strong"), "中台交易前检查", "Middle-office order check");
   bilingual(one(".da-order-summary .da-summary-total span"), "估算净额", "Estimated net amount");
   bilingual(amount.closest("label").querySelector(":scope > span"), "委托数量", "Quantity");
-  text(limit.closest("label").querySelector("b"), "USDT");
+  text(limitField.querySelector("b"), "USDT");
   amount.step = "any";
   amount.value = "0.01";
   kind.value = "market";
@@ -194,6 +195,12 @@
   let preview = null;
   let submitting = false;
   let orderVersion = 0;
+
+  function labelOrderButton(confirming) {
+    const [zh, en] = side === "buy" ? ["买入", "buy"] : ["卖出", "sell"];
+    bilingual(submit, confirming ? `确认模拟${zh}` : `预览${zh}`,
+      confirming ? `Confirm simulated ${en}` : `Preview ${en}`);
+  }
 
   function showSuitabilityWarning(warning) {
     orderRisk.hidden = !warning;
@@ -204,12 +211,12 @@
     const { code, risk_level: level, product_cap: cap, product_risk: product } = warning;
     const messages = {
       assessment_required: [
-        "尚未完成风险测评，暂时无法判断这笔买入是否适合你。",
-        "Complete the risk assessment to see whether this purchase matches your profile.",
+        "尚未测评，买入风险待评估。",
+        "No assessment yet. Purchase risk is unassessed.",
       ],
       product_cap: [
-        `你的风险等级为 ${level}，产品上限为 ${cap}。该交易对的演示档位为 ${product}，买入可能承担超出测评上限的风险。`,
-        `Your risk level is ${level}, with a product limit of ${cap}. This pair is rated ${product} in the demo, so buying may exceed your assessed risk tolerance.`,
+        `你的等级 ${level}（上限 ${cap}），产品演示档位 ${product}。买入可能超出测评范围。`,
+        `Your level is ${level} (limit ${cap}). The demo product is ${product} and may exceed your risk tolerance.`,
       ],
       assessment_prohibition: [
         "测评结果标记了买入风险，请查看你的风险说明后自行决定。",
@@ -222,10 +229,11 @@
   function invalidateOrder() {
     preview = null;
     orderVersion++;
-    limit.disabled = kind.value !== "limit";
+    limitField.hidden = limit.disabled = kind.value !== "limit";
     for (const id of ["#order-notional", "#order-fee", "#order-total"]) text(one(id), "—");
-    bilingual(submit, "预览模拟订单", "Preview simulated order");
-    bilingual(orderNotice, "预览时检查余额、仓位与适当性。", "Preview checks balance, position, and suitability.");
+    labelOrderButton(false);
+    orderStatus.hidden = true;
+    text(orderNotice, "");
     showSuitabilityWarning(null);
   }
 
@@ -264,7 +272,6 @@
       text(one(".da-clock"), "—");
       text(one(".da-fresh"), "—");
       marketBody.replaceChildren();
-      bilingual(one(".da-order .da-panelhead p"), "模拟交易", "Simulated trading");
       bilingual(marketNotice, "正在读取中台报价…", "Loading middle-office quotes…");
     }
     try {
@@ -385,8 +392,9 @@
         invalidateOrder();
         const names = { filled: ["已成交", "Filled"], open: ["已挂单", "Open"], rejected: ["已拒绝", "Rejected"] };
         const [zh, en] = names[result.status] || [result.status, result.status];
-        const detail = result.reason || result.order_id;
-        bilingual(orderNotice, `${zh} · ${detail}`, `${en} · ${detail}`);
+        const detail = result.reason ? ` · ${result.reason}` : "";
+        bilingual(orderNotice, zh + detail, en + detail);
+        orderStatus.hidden = false;
         showSuitabilityWarning(result.suitability_warning);
         loadAccount();
       } else {
@@ -398,27 +406,78 @@
         preview = result;
         showSuitabilityWarning(result.suitability_warning);
         for (const key of ["notional", "fee", "total"]) text(one(`#order-${key}`), money(result[key], result.quote_currency));
-        bilingual(submit, "确认模拟下单", "Confirm simulated order");
+        labelOrderButton(true);
         const feeZh = result.fee_assumed ? " · 模拟手续费按 0 计" : "";
         const feeEn = result.fee_assumed ? " · Simulated fee assumed zero" : "";
         bilingual(orderNotice, `${result.source} · ${result.expires_in} 秒内确认${feeZh}`, `${result.source} · Confirm within ${result.expires_in}s${feeEn}`);
+        orderStatus.hidden = false;
       }
     } catch (error) {
       if (error.code === "preview_expired") invalidateOrder();
-      if (version === orderVersion || confirming) text(orderNotice, errorMessage(error));
+      if (version === orderVersion || confirming) {
+        text(orderNotice, errorMessage(error));
+        orderStatus.hidden = false;
+      }
     } finally {
       submitting = submit.disabled = false;
     }
   });
 
+  const lesson = one("#guided-lesson");
+  const lessonTitle = one("#lesson-title");
+  const lessonFocus = one("#lesson-focus");
+  const lessonContent = one("#lesson-content");
+  const lessonTrade = one("#lesson-trade");
+  const lessonRetry = one("#lesson-retry");
+  let lessonVersion = 0;
+
+  async function loadLesson() {
+    const version = ++lessonVersion;
+    lesson.hidden = false;
+    lessonFocus.hidden = lessonTrade.hidden = lessonRetry.hidden = true;
+    bilingual(lessonTitle, "对应投教", "Tailored lesson");
+    bilingual(lessonContent, "正在加载…", "Loading…");
+    try {
+      const data = await request("/api/education");
+      if (version !== lessonVersion) return;
+      bilingual(lessonTitle, data.title.zh, data.title.en);
+      bilingual(lessonContent, data.content.zh, data.content.en);
+      if (data.focus) {
+        const { label, score } = data.focus;
+        bilingual(lessonFocus, `${label.zh} · ${score} / 100`, `${label.en} · ${score} / 100`);
+        lessonFocus.hidden = false;
+      }
+      bilingual(lessonTrade, "打开模拟下单页", "Open simulated order page");
+      lessonTrade.hidden = false;
+      if (!one("#screen-assistant").hidden) lessonTitle.focus();
+    } catch (error) {
+      if (version !== lessonVersion) return;
+      if (error.code === "assessment_required") {
+        bilingual(lessonContent, "请先完成测评。", "Complete the assessment first.");
+        bilingual(lessonRetry, "打开风险问卷", "Open risk questionnaire");
+        lessonRetry.onclick = () => navigate("questionnaire");
+      } else {
+        bilingual(lessonContent, "暂时无法加载投教。", "Lesson unavailable.");
+        bilingual(lessonRetry, "重试加载投教", "Retry lesson");
+        lessonRetry.onclick = loadLesson;
+      }
+      lessonRetry.hidden = false;
+    }
+  }
+
+  lessonTrade.addEventListener("click", () => navigate("trade"));
+  document.addEventListener("harbor-education-requested", loadLesson);
+  document.addEventListener("harbor-assessment-updated", () => {
+    lessonVersion++;
+    lesson.hidden = true;
+  });
+
   const messages = one(".da-messages");
   const input = one("#assistant-input");
   const send = one(".da-send");
-  const chatStatus = one(".da-chathead p");
   let history = [];
   messages.replaceChildren();
   input.maxLength = 2000;
-  bilingual(chatStatus, "模拟账户 · AI 助手", "Simulation account · AI assistant");
   one(".da-chathead button").addEventListener("click", () => { messages.replaceChildren(); history = []; input.focus(); });
 
   function addMessage(author, content) {
@@ -450,8 +509,6 @@
     try {
       const data = await request("/api/assistant/chat", "POST", { message, history, market_queries: marketQueries(message) });
       addMessage("ai", data.reply);
-      const detail = [data.mode, data.product_cap, data.generation].filter(Boolean).join(" · ");
-      bilingual(chatStatus, `模拟账户 · ${detail}`, `Simulation account · ${detail}`);
       // Account facts stay out of the browser-provided history for later model calls.
       if (!data.account) {
         history = [...history, { role: "user", content: message.slice(0, 800) },

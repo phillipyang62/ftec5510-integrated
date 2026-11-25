@@ -211,6 +211,9 @@ class Gateway:
         if path == "/api/assistant/chat" and method == "POST":
             self._ensure_profile()
             return self.ai.request(method, "/v1/chat", {**body, "user_id": self.user_id})
+        if path == "/api/education" and method == "GET":
+            self._ensure_profile()
+            return self.ai.request(method, "/v1/education/" + self.user_id)
         if path == "/api/risk" and method == "GET":
             return self.ai.request(method, "/v1/risk/" + self.user_id + query_string(params, "quote_currency"))
         if path == "/api/market/venues" and method == "GET":

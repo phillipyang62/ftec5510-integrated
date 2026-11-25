@@ -114,6 +114,7 @@ def check_account_switch(ui, url):
 
 def questionnaire_form(ui, middle, ai):
     checked(ui, "GET", "/api/profile", expected=404)
+    assert checked(ui, "GET", "/api/education", expected=404)["error"]["code"] == "assessment_required"
     bank = checked(ui, "GET", "/api/questionnaire")
     assert len(bank["questions"]) == 30
     assert [row["id"] for row in bank["questions"] if row["multiple"]] == ["KE2"]
@@ -136,11 +137,15 @@ def questionnaire_form(ui, middle, ai):
     stored = checked(middle, "GET", f"/api/accounts/{USER}/assessment")
     assert "answers" not in stored and stored["assessment"] == {key: value for key, value in assessment.items() if key != "allocation_range"}
     assert assessment == checked(ai, "GET", f"/v1/profiles/{USER}")["assessment"]
+    lesson = checked(ui, "GET", "/api/education")
+    assert lesson["title"]["zh"] == "市价单和限价单" and lesson["focus"]["score"] == 50
+    assert all(lesson["content"][lang] for lang in ("zh", "en"))
 
     leveraged = [{"qid": row["id"], "value": ["E"] if row["multiple"] else "B" if row["id"] == "OC5" else "E"}
                  for row in bank["questions"]]
     capped = checked(ui, "POST", "/api/questionnaire", {**payload, "answers": leveraged})
     assert capped["assessment"]["rai"] == 44 and "LEVERAGE_USE" in capped["assessment"]["flags"]
+    assert checked(ui, "GET", "/api/education")["title"]["zh"] == "杠杆风险"
     chat = checked(ui, "POST", "/api/assistant/chat", {"message": "帮我做一个模拟配置"})
     assert chat["mode"] == "clarify" and "杠杆" in chat["reply"]
 
@@ -149,6 +154,7 @@ def derived_profile_api(ui, middle, ai):
     beginner = {**ASSESSMENT, "assessment": {**ASSESSMENT["assessment"],
                 "dimensions": {**ASSESSMENT["assessment"]["dimensions"], "KE": 30}}}
     checked(middle, "PUT", f"/api/accounts/{USER}/assessment", beginner)
+    assert checked(ui, "GET", "/api/education")["focus"]["score"] == 30
     education = checked(ui, "POST", "/api/assistant/chat", {"message": "什么是滑点？"})
     assert education["mode"] == "education" and education["reply"]
 
@@ -159,6 +165,7 @@ def derived_profile_api(ui, middle, ai):
     assert actual == {"allocation_range": None, **authoritative}
     assert actual == result["assessment"] == checked(ai, "GET", f"/v1/profiles/{USER}")["assessment"]
     assert actual["risk_level"] == "C4" and actual["product_cap"] == "R4"
+    assert checked(ui, "GET", "/api/education")["title"]["zh"] == "期限与流动性"
     assert checked(ui, "PUT", "/api/profile", {"assessment": {}}, expected=400)["error"]["code"] == "invalid_assessment"
 
 
@@ -224,7 +231,7 @@ def offline_checks():
         print("PASS account-name sign-in, session cookie, and anonymous access check")
 
         questionnaire_form(ui, middle, ai)
-        print("PASS original 30 questions, example RAI 61/C3/R3, incomplete answers, leverage cap and AI follow-up")
+        print("PASS questionnaire, example RAI 61/C3/R3, risk caps and profile-based education")
 
         derived_profile_api(ui, middle, ai)
         print("PASS questionnaire scores and product cap persist in middle office and AI")

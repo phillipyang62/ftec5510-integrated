@@ -41,6 +41,45 @@ KNOWLEDGE = (
      "波动描述价格上下变化的程度。回撤关注从阶段高点到后续低点的跌幅，两者可以帮助理解不同的风险。"),
 )
 
+LEARNING_TOPICS = {
+    "FC": (("资金缓冲", "Cash buffer"), (
+        "资金缓冲用于应对收入中断和临时支出。波动资产下跌时，临时用钱可能迫使投资者在低价卖出。",
+        "A cash buffer covers income gaps and unexpected expenses. A sudden cash need can force a sale during a drawdown.",
+    )),
+    "RA": (("波动与回撤", "Volatility and drawdowns"), (
+        "波动是价格涨跌的幅度。回撤衡量从高点到低点的跌幅，同一笔投资在过程中可能经历很大的回撤。",
+        "Volatility measures price swings. A drawdown measures the fall from a peak, which can be substantial even within one investment period.",
+    )),
+    "KE": (("市价单和限价单", "Market and limit orders"), (
+        "市价单优先成交，价格随当前报价变动。限价单设定可接受的价格，报价未达到该价格时可以留在挂单列表。",
+        "A market order prioritizes execution at available prices. A limit order sets a price boundary and can remain open until that price is available.",
+    )),
+    "BD": (("仓位与交易纪律", "Position size and discipline"), (
+        "仓位越大，同样的价格波动对账户的影响越大。预览订单时可以同时看本笔金额和累计持仓。",
+        "Larger positions make the same price swing matter more to your account. In an order preview, compare the order size with your existing holdings.",
+    )),
+    "OC": (("期限与流动性", "Time horizon and liquidity"), (
+        "投资期限决定可以等多久，流动性决定能多快卖出。挂单未成交时，对应资金或持仓可能仍被占用。",
+        "Your horizon is how long you can wait. Liquidity affects how quickly you can sell. An open order may still reserve cash or holdings.",
+    )),
+    "leverage": (("杠杆风险", "Leverage risk"), (
+        "测评提示了杠杆使用。借入资金会放大盈亏，价格逆向变动还可能触发强制平仓。",
+        "Your assessment flagged leverage. Borrowing magnifies gains and losses, and an adverse move can trigger liquidation.",
+    )),
+    "review": (("复核风险测评", "Review your assessment"), (
+        "测评结果需要复核。对照你的实际资金需求和可接受亏损，再决定是否重新测评。",
+        "Review how your cash needs and tolerance for losses match your answers before deciding whether to retake the assessment.",
+    )),
+}
+
+LEARNING_DIMENSIONS = {
+    "FC": ("财务承载力", "Financial capacity"),
+    "RA": ("风险意愿", "Risk willingness"),
+    "KE": ("认知与经验", "Knowledge and experience"),
+    "BD": ("行为纪律", "Behavioral discipline"),
+    "OC": ("目标与约束", "Objectives and constraints"),
+}
+
 SYSTEM = """你是课堂原型的数字资产助手。下方 JSON 由后端生成，包含本轮画像、服务路径和可用事实。
 按知识档位调整讲解，按财富档位调整示例的复杂度，保持后端给出的风险上限。clarify 时明确需要补测，
 education 时做基础教育，advisory 时仅做假设情景或一般风险分析。保持简洁，用用户使用的语言回答。
@@ -135,6 +174,25 @@ class Assistant:
     def risk(self, user_id, quote_currency):
         return portfolio_risk(self.account_snapshot(user_id), quote_currency, self.lookup_market,
                               max_age=self.quote_max_age)
+
+    def education(self, user_id):
+        profile = self.profiles.get(user_id)
+        if not profile or not profile.assessment:
+            return None
+        scores = profile.assessment.dimensions
+        if "LEVERAGE_USE" in profile.assessment.flags:
+            topic = "leverage"
+        elif profile.route == "clarify":
+            topic = "review"
+        elif profile.route == "education":
+            topic = "KE"
+        else:
+            topic = min(scores, key=scores.__getitem__)
+        title, content = LEARNING_TOPICS[topic]
+        focus = None
+        if topic in LEARNING_DIMENSIONS:
+            focus = {"label": dict(zip(("zh", "en"), LEARNING_DIMENSIONS[topic])), "score": scores[topic]}
+        return {"title": dict(zip(("zh", "en"), title)), "content": dict(zip(("zh", "en"), content)), "focus": focus}
 
     def respond(self, user_id, payload):
         message, history, explicit_queries, include_account, include_simulation = validate_chat(payload)

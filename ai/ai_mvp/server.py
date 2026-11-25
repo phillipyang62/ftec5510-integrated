@@ -149,6 +149,12 @@ class ApiHandler(BaseHTTPRequestHandler):
             if not QUOTE_CURRENCY.fullmatch(currency):
                 raise ApiError(400, "invalid_quote_currency", "quote_currency must be a currency code")
             return 200, assistant.risk(user_id, currency.upper())
+        if path.startswith("/v1/education/") and method == "GET":
+            user_id = require_user_id(unquote(path.removeprefix("/v1/education/")))
+            lesson = assistant.education(user_id)
+            if lesson is None:
+                raise ApiError(404, "assessment_required", "Complete the questionnaire for a tailored lesson")
+            return 200, lesson
         if (method, path) == ("POST", "/v1/chat"):
             payload = self._json_body()
             return 200, assistant.respond(require_user_id(payload.get("user_id")), payload)
