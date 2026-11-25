@@ -194,7 +194,7 @@ class Assistant:
             focus = {"label": dict(zip(("zh", "en"), LEARNING_DIMENSIONS[topic])), "score": scores[topic]}
         return {"title": dict(zip(("zh", "en"), title)), "content": dict(zip(("zh", "en"), content)), "focus": focus}
 
-    def respond(self, user_id, payload):
+    def respond(self, user_id, payload, *, models=None):
         message, history, explicit_queries, include_account, include_simulation = validate_chat(payload)
         profile = self.profiles.get(user_id)
         assessment = profile.assessment if profile else None
@@ -251,6 +251,7 @@ class Assistant:
         }
         explanation = self._fallback(profile_data, lesson, market_requested, account is not None)
         generation = "template"
+        model_name = None
         if mode == "clarify" and assessment is not None:
             generation = "rule_based"
         elif simulation is not None:
@@ -263,7 +264,8 @@ class Assistant:
                 "current_message": message,
             }, ensure_ascii=False)
             account_history = any(mentions_account(turn["content"]) for turn in history)
-            for name, model in (("local_model", self.model), ("remote_model", self.remote_model)):
+            candidates = models if models is not None else (("local_model", self.model), ("remote_model", self.remote_model))
+            for name, model in candidates:
                 if model is None or (name == "remote_model" and (account is not None or account_history)):
                     continue
                 try:
@@ -281,6 +283,7 @@ class Assistant:
                     generation = "template_fact_guard"
                     break
                 explanation, generation = generated, name
+                model_name = getattr(model, "model", None)
                 break
 
         facts = self._facts(market_requested, market, account)
@@ -298,6 +301,8 @@ class Assistant:
         }
         if assessment is not None:
             result["product_cap"] = assessment.product_cap
+        if model_name:
+            result["model_name"] = model_name
         if simulation is not None:
             result["simulation"] = simulation
         return result

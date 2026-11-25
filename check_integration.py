@@ -6,6 +6,7 @@ from importlib.util import find_spec
 from http.cookiejar import CookieJar
 import json
 from time import monotonic, sleep
+from unittest.mock import patch
 from urllib.error import HTTPError
 from urllib.parse import urlencode
 from urllib.request import HTTPCookieProcessor, Request, build_opener, urlopen
@@ -67,7 +68,7 @@ def check_html(url):
 
 def check_sign_in(ui):
     assert checked(ui, "GET", "/api/session") == {"account_name": None}
-    for path in ("/api/account/summary", "/api/profile", "/api/orders"):
+    for path in ("/api/account/summary", "/api/profile", "/api/orders", "/api/model-settings"):
         assert checked(ui, "GET", path, expected=401)["error"]["code"] == "sign_in_required"
     assert checked(ui, "POST", "/api/session", {"account_name": "../no"}, expected=400)["error"]["code"] == "invalid_account_name"
     assert checked(ui, "POST", "/api/session", {"account_name": f" {USER} "}) == {"account_name": USER}
@@ -110,6 +111,49 @@ def check_account_switch(ui, url):
     assert checked(ui, "GET", "/api/orders")["orders"] == first_orders
     assert checked(ui, "GET", "/api/account/summary")["portfolio"]["balances"] == first_ledger["portfolio"]["balances"]
     assert checked(ui, "GET", "/api/profile") == first_profile
+
+
+def check_session_models(url):
+    first, second = BrowserClient(url), BrowserClient(url)
+    for client in (first, second):
+        checked(client, "POST", "/api/session", {"account_name": "student_models"})
+    settings_path = "/api/model-settings"
+    default = {"provider": "default", "model": None, "has_api_key": False}
+    key = "fake-deepseek-integration-fixture"
+    settings = {"provider": "deepseek", "api_key": key, "allow_billing": True}
+    question = {"message": "Explain what slippage means in one sentence."}
+
+    with patch("ai_mvp.models.HTTPSConnection") as connect:
+        response = connect.return_value.getresponse.return_value
+        response.status = 200
+        response.read.return_value = b'{"choices":[{"message":{"content":"Slippage is the change from the expected execution price."},"finish_reason":"stop"}]}'
+        catalog = checked(first, "GET", settings_path)
+        assert catalog["settings"] == default and isinstance(catalog["ollama"]["models"], list)
+        checked(first, "PUT", settings_path, {**settings, "allow_billing": False}, expected=400)
+        selected = {"provider": "deepseek", "model": catalog["deepseek_model"], "has_api_key": True}
+        assert checked(first, "PUT", settings_path, settings) == selected
+        assert checked(first, "GET", settings_path)["settings"] == selected
+        assert checked(second, "GET", settings_path)["settings"] == default
+        ignored_override = checked(second, "POST", "/api/assistant/chat", {**question, "model_settings": settings})
+        assert ignored_override["generation"] == "template"
+        connect.assert_not_called()
+
+        reply = checked(first, "POST", "/api/assistant/chat", question)
+        assert reply["generation"] == "remote_model" and reply["model_name"] == selected["model"]
+        assert key not in json.dumps(reply)
+        connect.assert_called_once()
+        assert connect.call_args.args == ("api.deepseek.com", 443)
+        call = connect.return_value.request.call_args
+        assert call.args == ("POST", "/v1/chat/completions")
+        assert call.kwargs["headers"]["Authorization"] == f"Bearer {key}"
+        assert json.loads(call.kwargs["body"])["model"] == selected["model"]
+
+        reply = checked(first, "POST", "/api/assistant/chat", {**question, "include_account": True})
+        assert reply["generation"] == "template"
+        connect.assert_called_once()
+        checked(first, "DELETE", "/api/session")
+        checked(first, "POST", "/api/session", {"account_name": "student_models"})
+        assert checked(first, "GET", settings_path)["settings"] == default
 
 
 def questionnaire_form(ui, middle, ai):
@@ -229,6 +273,9 @@ def offline_checks():
 
         check_sign_in(ui)
         print("PASS account-name sign-in, session cookie, and anonymous access check")
+
+        check_session_models(url)
+        print("PASS DeepSeek request via mock, explicit billing opt-in, and per-login key isolation")
 
         questionnaire_form(ui, middle, ai)
         print("PASS questionnaire, example RAI 61/C3/R3, risk caps and profile-based education")

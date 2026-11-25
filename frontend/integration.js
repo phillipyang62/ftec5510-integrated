@@ -147,7 +147,7 @@
     ".da-watchlist-head, .da-watchfoot, .da-watchrow > :not(.da-asset), .da-quickamounts, " +
     ".da-order-summary > div:nth-child(3), .da-context-panel, #screen-account .da-headactions, " +
     ".da-account-grid, .da-holdings .da-textbtn, .da-screen .da-pagehead p, " +
-    ".da-order-note, .da-order .da-panelhead p, .da-precheck strong, .da-chathead p, .da-chat-disclaimer, .da-prompts");
+    ".da-order-note, .da-order .da-panelhead p, .da-precheck strong, .da-chat-disclaimer");
   bilingual(one(".da-status"), "模拟账户", "Simulation account");
   bilingual(one("#trade-title"), "模拟下单", "Simulated order");
   bilingual(one('[data-screen-target="trade"] span'), "模拟下单", "Simulated order");
@@ -475,10 +475,110 @@
   const messages = one(".da-messages");
   const input = one("#assistant-input");
   const send = one(".da-send");
+  const newChat = one("#new-chat");
+  const replyModel = one("#reply-model");
+  const modelSettings = one("#model-settings");
+  const modelProvider = one("#model-provider");
+  const ollamaModel = one("#ollama-model");
+  const deepseekKey = one("#deepseek-key");
+  const deepseekAgree = one("#deepseek-agree");
+  const modelStatus = one("#model-settings-status");
+  const modelSave = one("#model-settings-save");
+  const modelCancel = one("#model-settings-cancel");
+  let modelLoad = 0;
+  let savedKey = false;
   let history = [];
-  messages.replaceChildren();
   input.maxLength = 2000;
-  one(".da-chathead button").addEventListener("click", () => { messages.replaceChildren(); history = []; input.focus(); });
+  newChat.addEventListener("click", () => {
+    messages.replaceChildren();
+    history = [];
+    replyModel.hidden = true;
+    input.focus();
+  });
+
+  function refreshModelFields() {
+    const usingOllama = modelProvider.value === "ollama";
+    const usingDeepSeek = modelProvider.value === "deepseek";
+    one("#ollama-fields").hidden = !usingOllama;
+    one("#deepseek-fields").hidden = !usingDeepSeek;
+    ollamaModel.disabled = !usingOllama;
+    deepseekKey.disabled = deepseekAgree.disabled = !usingDeepSeek;
+    deepseekKey.required = usingDeepSeek && !savedKey;
+    deepseekAgree.required = usingDeepSeek;
+    modelSave.disabled = modelProvider.disabled || (usingOllama && !ollamaModel.value);
+    if (usingOllama && !ollamaModel.value) {
+      bilingual(modelStatus, "未找到本地模型。启动 Ollama、安装模型后重新打开设置。",
+        "No local models found. Start Ollama, install a model, then reopen settings.");
+    } else {
+      text(modelStatus, "");
+    }
+  }
+
+  one("#model-settings-open").addEventListener("click", async () => {
+    const load = ++modelLoad;
+    deepseekKey.value = "";
+    deepseekAgree.checked = false;
+    modelProvider.disabled = modelSave.disabled = true;
+    one("#ollama-fields").hidden = one("#deepseek-fields").hidden = true;
+    bilingual(modelStatus, "正在读取模型设置…", "Loading model settings…");
+    modelSettings.showModal();
+    try {
+      const data = await request("/api/model-settings");
+      if (!modelSettings.open || load !== modelLoad) return;
+      savedKey = data.settings.has_api_key;
+      deepseekKey.placeholder = savedKey
+        ? (document.documentElement.lang === "en" ? "Leave blank to keep the saved key" : "留空可保留已保存的 Key")
+        : "";
+      ollamaModel.replaceChildren(...data.ollama.models.map((model) => new Option(model, model)));
+      if (data.settings.provider === "ollama") ollamaModel.value = data.settings.model;
+      modelProvider.value = data.settings.provider;
+      modelProvider.disabled = false;
+      refreshModelFields();
+      modelProvider.focus();
+    } catch {
+      if (modelSettings.open && load === modelLoad) {
+        bilingual(modelStatus, "暂时无法读取模型设置。关闭后可重试。", "Could not load model settings. Close and reopen to retry.");
+      }
+    }
+  });
+
+  modelCancel.addEventListener("click", () => modelSettings.close());
+  modelSettings.addEventListener("close", () => {
+    deepseekKey.value = "";
+    deepseekAgree.checked = false;
+  });
+  modelProvider.addEventListener("change", refreshModelFields);
+  ollamaModel.addEventListener("change", refreshModelFields);
+  one("#model-settings-form").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    if (modelSave.disabled) return;
+    const provider = modelProvider.value;
+    const settings = { provider };
+    if (provider === "ollama") settings.model = ollamaModel.value;
+    if (provider === "deepseek") {
+      settings.api_key = deepseekKey.value.trim();
+      settings.allow_billing = deepseekAgree.checked;
+    }
+    modelProvider.disabled = ollamaModel.disabled = deepseekKey.disabled = deepseekAgree.disabled = modelSave.disabled = true;
+    modelCancel.disabled = true;
+    bilingual(modelStatus, "正在保存…", "Saving…");
+    try {
+      await request("/api/model-settings", "PUT", settings);
+      modelSettings.close();
+    } catch (error) {
+      modelProvider.disabled = false;
+      refreshModelFields();
+      bilingual(modelStatus, "无法保存设置，请检查模型或 API Key。", "Could not save settings. Check the model or API key.");
+      if (error.code === "secure_model_service_required") {
+        bilingual(modelStatus, "DeepSeek Key 需要本机 AI 服务或 HTTPS。", "DeepSeek keys require a local or HTTPS AI service.");
+      }
+    } finally {
+      modelCancel.disabled = false;
+    }
+  });
+  modelSettings.addEventListener("cancel", (event) => {
+    if (modelCancel.disabled) event.preventDefault();
+  });
 
   function addMessage(author, content) {
     const entry = node("div", undefined, `da-message da-message-${author}`);
@@ -502,13 +602,23 @@
     event.preventDefault();
     const message = input.value.trim();
     if (!message || send.disabled) return;
-    const newChat = one(".da-chathead button");
     send.disabled = newChat.disabled = true;
+    replyModel.hidden = true;
     addMessage("user", message);
     input.value = "";
     try {
       const data = await request("/api/assistant/chat", "POST", { message, history, market_queries: marketQueries(message) });
       addMessage("ai", data.reply);
+      if (data.generation === "local_model") {
+        text(replyModel, data.model_name ? `Ollama · ${data.model_name}` : "Ollama");
+      } else if (data.generation === "remote_model") {
+        text(replyModel, data.model_name ? `API · ${data.model_name}` : "API");
+      } else if (data.generation === "template_model_unavailable") {
+        bilingual(replyModel, "模型不可用 · 内置回复", "Model unavailable · Built-in reply");
+      } else {
+        bilingual(replyModel, "内置回复", "Built-in reply");
+      }
+      replyModel.hidden = false;
       // Account facts stay out of the browser-provided history for later model calls.
       if (!data.account) {
         history = [...history, { role: "user", content: message.slice(0, 800) },

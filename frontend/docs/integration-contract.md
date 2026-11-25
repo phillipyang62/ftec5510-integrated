@@ -98,6 +98,15 @@ simulation
 trace_id
 ```
 
+生成模型成功时还返回 `model_name`。前端按 `generation` 显示实际用到的模型或内置回复。
+
+### 模型设置
+
+- `GET /api/model-settings` 返回 `ollama.models`、DeepSeek 默认模型名、启动时配置和当前会话的 `settings`（`provider`、`model`、`has_api_key`）。
+- `PUT /api/model-settings` 接收 `{"provider":"default"}`、`{"provider":"ollama","model":"qwen3.5:9b-q4_K_M"}`，或 `{"provider":"deepseek","api_key":"<用户填写>","allow_billing":true}`。同一会话已保存 DeepSeek Key 时，可以留空以沿用。成功时只返回脱敏的 `settings` 字段内容。
+- BFF 使用服务令牌调用 `GET/PUT /v1/model-settings` 查询目录和校验配置。Key 只驻留当前 BFF 会话内存。AI 服务通过本机 HTTP 或 HTTPS 接收 Key，浏览器响应不包含 Key。保存和读取设置不调用 DeepSeek API。
+- BFF 给 `POST /v1/chat` 附加本次登录的 `model_settings`，忽略浏览器自行提交的同名字段。涉及账户上下文时绕过远程生成。会话注销、过期或切换时需要重新配置。
+
 ### 风险
 
 ```http

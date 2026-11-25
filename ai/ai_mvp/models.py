@@ -101,18 +101,22 @@ class OllamaModel:
         connection = HTTPConnection(self.host, self.port, timeout=self.timeout)
         return _request_json(connection, "local Ollama", method, path, data)
 
-    def generate(self, system: str, user: str) -> str:
-        # An installed alias can still point to a remote model. Check its metadata
-        # before sending any user data to the model endpoint.
+    def installed_models(self) -> list[str]:
         tags = self._request("GET", "/api/tags").get("models")
-        accepted_names = (self.model, self.model.removesuffix(":latest"))
-        if not isinstance(tags, list) or not any(
-            isinstance(entry, dict)
-            and (entry.get("model") or entry.get("name")) in accepted_names
-            and not entry.get("remote_host")
-            and not entry.get("remote_model")
-            for entry in tags
-        ):
+        if not isinstance(tags, list):
+            raise ModelUnavailable("Ollama returned an invalid model list")
+        names = set()
+        for entry in tags:
+            if not isinstance(entry, dict) or entry.get("remote_host") or entry.get("remote_model"):
+                continue
+            name = entry.get("model") or entry.get("name")
+            if isinstance(name, str) and name and not any(c.isspace() for c in name) and not _CLOUD_MODEL.search(name):
+                names.add(_with_default_tag(name))
+        return sorted(names)
+
+    def generate(self, system: str, user: str) -> str:
+        # Check aliases before sending a prompt, since they may point to a remote model.
+        if self.model not in self.installed_models():
             raise ModelUnavailable("The configured model is not installed locally")
 
         result = self._request(
@@ -238,3 +242,35 @@ def remote_from_environment(*, enabled: bool = False) -> OpenAICompatibleModel |
         api_key,
         _timeout_from_environment("AI_MVP_REMOTE_TIMEOUT_SECONDS", _REMOTE_TIMEOUT),
     )
+
+
+def model_options(local, remote):
+    try:
+        probe = OllamaModel("model-catalog", os.environ.get("AI_MVP_OLLAMA_URL", _DEFAULT_URL).strip(), timeout=3)
+        ollama = {"status": "ready", "models": probe.installed_models()}
+    except (ModelUnavailable, ValueError):
+        ollama = {"status": "unavailable", "models": []}
+    return {"ollama": ollama, "deepseek_model": _DEFAULT_REMOTE_MODEL,
+            "startup": {"local": local.model if local else None, "remote": remote.model if remote else None}}
+
+
+def session_model(settings):
+    if not isinstance(settings, dict):
+        raise ValueError("Model settings must be an object")
+    provider = settings.get("provider")
+    if provider == "default":
+        return provider, None
+    if provider == "ollama":
+        model_name = settings.get("model")
+        if not isinstance(model_name, str) or not 1 <= len(model_name.strip()) <= 160:
+            raise ValueError("Select an installed Ollama model")
+        return provider, from_environment(model_name=model_name)
+    if provider == "deepseek":
+        api_key = settings.get("api_key")
+        if not isinstance(api_key, str) or not 1 <= len(api_key.strip()) <= 512:
+            raise ValueError("Enter a valid DeepSeek API key")
+        if settings.get("allow_billing") is not True:
+            raise ValueError("Confirm DeepSeek usage-based billing")
+        timeout = _timeout_from_environment("AI_MVP_REMOTE_TIMEOUT_SECONDS", _REMOTE_TIMEOUT)
+        return provider, OpenAICompatibleModel(_DEFAULT_REMOTE_MODEL, _DEFAULT_REMOTE_URL, api_key.strip(), timeout)
+    raise ValueError("Unsupported model provider")

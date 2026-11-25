@@ -2,6 +2,7 @@
 
 import json
 import re
+from dataclasses import dataclass, field
 from http.client import HTTPConnection, HTTPSConnection, HTTPException
 from secrets import token_urlsafe
 from threading import Lock
@@ -36,14 +37,14 @@ class JsonService:
         self.name, self.host, self.port = name, url.hostname, url.port
         self.token, self.timeout = token, timeout
 
-    def request(self, method, path, body=None):
+    def request(self, method, path, body=None, *, timeout=None):
         headers = {"Accept": "application/json"}
         if self.token:
             headers["Authorization"] = "Bearer " + self.token
         if body is not None:
             headers["Content-Type"] = "application/json"
             body = json.dumps(body, allow_nan=False).encode("utf-8")
-        connection = self.connection(self.host, self.port, timeout=self.timeout)
+        connection = self.connection(self.host, self.port, timeout=self.timeout if timeout is None else timeout)
         try:
             connection.request(method, path, body, headers)
             response = connection.getresponse()
@@ -98,23 +99,35 @@ class DemoSessions:
                     raise GatewayError(502, "account_unavailable", "Could not open the simulation account")
                 account = self.accounts[name] = Gateway(self.ai, self.middle, name)
             now = monotonic()
-            self.sessions = {token: record for token, record in self.sessions.items() if record[0] > now}
+            self.sessions = {token: record for token, record in self.sessions.items() if record.expires_at > now}
             self.sessions.pop(previous_token, None)
             token = token_urlsafe(32)
-            self.sessions[token] = now + SESSION_TTL, account
+            self.sessions[token] = DemoSession(now + SESSION_TTL, account)
         return token, account
 
     def current(self, token):
         with self.lock:
             record = self.sessions.get(token)
-            if record is not None and record[0] > monotonic():
-                return record[1]
+            if record is not None and record.expires_at > monotonic():
+                return record
             self.sessions.pop(token, None)
         return None
 
     def sign_out(self, token):
         with self.lock:
             self.sessions.pop(token, None)
+
+
+@dataclass
+class DemoSession:
+    expires_at: float
+    account: "Gateway"
+    model_settings: dict | None = field(default=None, repr=False)
+
+    def public_model_settings(self):
+        stored = self.model_settings or {"provider": "default", "model": None}
+        return {"provider": stored["provider"], "model": stored["model"],
+                "has_api_key": bool(stored.get("api_key"))}
 
 
 class Gateway:
@@ -189,7 +202,29 @@ class Gateway:
                 return 200, order
         raise GatewayError(404, "order_not_found", "This account has no order with that ID")
 
-    def dispatch(self, method, url, body):
+    def _models(self, method, session, body):
+        if method == "GET":
+            status, data = self.ai.request("GET", "/v1/model-settings")
+            if status == 200:
+                data = {**data, "settings": session.public_model_settings()}
+            return status, data
+
+        candidate = {**body}
+        if candidate.get("provider") == "deepseek":
+            if self.ai.connection is HTTPConnection and self.ai.host not in {"127.0.0.1", "::1", "localhost"}:
+                raise GatewayError(409, "secure_model_service_required", "DeepSeek keys require a local or HTTPS AI service")
+            current = session.model_settings or {}
+            if candidate.get("api_key") in (None, "") and current.get("provider") == "deepseek":
+                candidate["api_key"] = current["api_key"]
+        status, selected = self.ai.request("PUT", "/v1/model-settings", candidate)
+        if status != 200:
+            return status, selected
+        if selected["provider"] == "deepseek":
+            selected = {**selected, "api_key": candidate["api_key"].strip(), "allow_billing": True}
+        session.model_settings = None if selected["provider"] == "default" else selected
+        return 200, session.public_model_settings()
+
+    def dispatch(self, method, url, body, session):
         path = url.path
         try:
             params = parse_qs(url.query, keep_blank_values=True, max_num_fields=16)
@@ -208,9 +243,14 @@ class Gateway:
             return self.ai.request(method, self.profile_path)
         if path == "/api/profile" and method == "PUT":
             return self._save_profile(body)
+        if path == "/api/model-settings" and method in {"GET", "PUT"}:
+            return self._models(method, session, body)
         if path == "/api/assistant/chat" and method == "POST":
             self._ensure_profile()
-            return self.ai.request(method, "/v1/chat", {**body, "user_id": self.user_id})
+            settings = session.model_settings
+            return self.ai.request(method, "/v1/chat",
+                                   {**body, "user_id": self.user_id, "model_settings": settings},
+                                   timeout=450 if settings is not None else None)
         if path == "/api/education" and method == "GET":
             self._ensure_profile()
             return self.ai.request(method, "/v1/education/" + self.user_id)

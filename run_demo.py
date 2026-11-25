@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from secrets import token_urlsafe
 import sys
+import webbrowser
 from tempfile import TemporaryDirectory
 from threading import Event, Thread
 
@@ -123,6 +124,7 @@ def start_demo_feed(resources, office):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--port", type=int, help="UI port. Defaults to the first free port from 5510 to 5529.")
+    parser.add_argument("--open-browser", action="store_true", help="open the connected demo in the default browser")
     parser.add_argument("--ollama-model", help="Installed local Ollama model")
     parser.add_argument("--enable-deepseek", action="store_true", help="Opt in to the API-key model")
     parser.add_argument("--live-market", action="store_true", help="use public spot quotes; execution stays simulated")
@@ -132,6 +134,8 @@ def main():
                         live_market=args.live_market) as stack:
             mode = "public market data, simulated execution" if args.live_market else "offline simulation"
             print(f"Harbor Invest ({mode}): {stack[-1]}/  (Ctrl+C to stop)", flush=True)
+            if args.open_browser:
+                webbrowser.open(stack[-1] + "/")
             Event().wait()
     except KeyboardInterrupt:
         pass

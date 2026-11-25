@@ -6,6 +6,7 @@ from ipaddress import IPv4Address
 from urllib.parse import parse_qs, unquote, urlsplit
 
 from .assistant import ChatValidationError
+from .models import model_options, session_model
 from .profiles import ProfileValidationError
 
 
@@ -116,6 +117,13 @@ class ApiHandler(BaseHTTPRequestHandler):
             raise ApiError(401, "unauthorized", "valid service bearer token required")
 
         assistant = self.server.assistant
+        if path == "/v1/model-settings" and method in {"GET", "PUT"}:
+            if method == "GET":
+                return 200, model_options(assistant.model, assistant.remote_model)
+            if not token:
+                raise ApiError(403, "model_settings_unavailable", "Configure an AI service token for session models")
+            provider, model = self._session_model(self._json_body())
+            return 200, {"provider": provider, "model": model.model if model else None}
         if path.startswith("/v1/profiles/") and method in ("GET", "PUT"):
             user_id = require_user_id(unquote(path.removeprefix("/v1/profiles/")))
             if method == "PUT":
@@ -157,5 +165,23 @@ class ApiHandler(BaseHTTPRequestHandler):
             return 200, lesson
         if (method, path) == ("POST", "/v1/chat"):
             payload = self._json_body()
-            return 200, assistant.respond(require_user_id(payload.get("user_id")), payload)
+            user_id = require_user_id(payload.get("user_id"))
+            settings = payload.get("model_settings")
+            models = None
+            if settings is not None:
+                if not token:
+                    raise ApiError(403, "model_settings_unavailable", "Configure an AI service token for session models")
+                provider, model = self._session_model(settings)
+                if provider == "ollama":
+                    models = (("local_model", model),)
+                elif provider == "deepseek":
+                    models = (("remote_model", model), ("local_model", assistant.model))
+            return 200, assistant.respond(user_id, payload, models=models)
         raise ApiError(404, "not_found", "unknown endpoint")
+
+    @staticmethod
+    def _session_model(settings):
+        try:
+            return session_model(settings)
+        except ValueError as error:
+            raise ApiError(400, "invalid_model_settings", str(error)) from None

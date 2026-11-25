@@ -1,4 +1,4 @@
-"""Local preview launcher for the Harbor Invest UI prototype."""
+"""Integrated Harbor Invest gateway and demo launcher."""
 
 from __future__ import annotations
 
@@ -7,6 +7,8 @@ import io
 import json
 import os
 import re
+import subprocess
+import sys
 import threading
 import webbrowser
 from http.cookies import CookieError, SimpleCookie
@@ -22,8 +24,8 @@ HOST = "127.0.0.1"
 PREFERRED_PORT = 5510
 STATIC_ASSETS = {"/", "/index.html", "/lucide.min.js", "/integration.js", "/questionnaire.js"}
 
-class PreviewHandler(SimpleHTTPRequestHandler):
-    """Serve the prototype without cached files during iterative preview."""
+class AssetHandler(SimpleHTTPRequestHandler):
+    """Serve the application's assets without caching."""
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=str(ROOT), **kwargs)
@@ -42,7 +44,7 @@ class PreviewHandler(SimpleHTTPRequestHandler):
         print(f"[UI] {message_format % args}")
 
 
-class IntegratedHandler(PreviewHandler):
+class IntegratedHandler(AssetHandler):
     """Serve only the UI assets and explicitly registered gateway routes."""
 
     def setup(self):
@@ -80,8 +82,8 @@ class IntegratedHandler(PreviewHandler):
         path = urlsplit(self.path).path
         if path not in {"/", "/index.html"}:
             return super().send_head()
-        account = self.server.sessions.current(self._session_token())
-        account_attr = f' data-account-name="{account.user_id}"' if account else ""
+        session = self.server.sessions.current(self._session_token())
+        account_attr = f' data-account-name="{session.account.user_id}"' if session else ""
         body_tag = f'<body data-integrated="true"{account_attr}>'.encode("ascii")
         html = (ROOT / "index.html").read_bytes().replace(b"<body>", body_tag, 1)
         self.send_response(200)
@@ -142,7 +144,8 @@ class IntegratedHandler(PreviewHandler):
         if (method, path) == ("POST", "/api/session"):
             new_token, account = sessions.sign_in(body, token)
             return 200, {"account_name": account.user_id}, (new_token, SESSION_TTL)
-        account = sessions.current(token)
+        session = sessions.current(token)
+        account = session.account if session else None
         expected = self.headers.get("X-Harbor-Account")
         if expected is not None and (account is None or expected != account.user_id):
             raise GatewayError(401, "session_changed", "The simulation account has changed; reload to continue")
@@ -154,7 +157,7 @@ class IntegratedHandler(PreviewHandler):
                 return 200, {"account_name": None}, ("", 0)
         if account is None:
             raise GatewayError(401, "sign_in_required", "Sign in to a simulation account first")
-        return (*account.dispatch(method, url, body), None)
+        return (*account.dispatch(method, url, body, session), None)
 
     def do_GET(self):
         if self.path.startswith("/api/"):
@@ -165,13 +168,12 @@ class IntegratedHandler(PreviewHandler):
     do_POST = do_PUT = do_DELETE = _api
 
 
-def create_server(sessions=None, *, port=None):
+def create_server(sessions, *, port=None):
     ports = (port,) if port is not None else range(PREFERRED_PORT, PREFERRED_PORT + 20)
     last_error = None
     for candidate in ports:
         try:
-            handler = IntegratedHandler if sessions is not None else PreviewHandler
-            server = ThreadingHTTPServer((HOST, candidate), handler)
+            server = ThreadingHTTPServer((HOST, candidate), IntegratedHandler)
             server.sessions = sessions
             return server, server.server_port
         except OSError as error:
@@ -180,20 +182,29 @@ def create_server(sessions=None, *, port=None):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Run the local UI prototype.")
+    parser = argparse.ArgumentParser(description="Run the local Harbor Invest demo.")
     parser.add_argument("--no-browser", action="store_true", help="Do not open a browser automatically.")
     parser.add_argument("--integrated", action="store_true", help="Connect to separately running AI and middle-office services.")
     parser.add_argument("--port", type=int)
     args = parser.parse_args()
 
-    sessions = None
-    if args.integrated:
+    if not args.integrated:
+        command = [sys.executable, str(ROOT.parent / "run_demo.py")]
+        if not args.no_browser:
+            command.append("--open-browser")
+        if args.port is not None:
+            command.extend(["--port", str(args.port)])
         try:
-            ai = JsonService("ai", os.getenv("HARBOR_AI_URL", "http://127.0.0.1:8000"), os.environ["AI_MVP_API_TOKEN"], timeout=450)
-            middle = JsonService("middle_office", os.getenv("HARBOR_MIDDLE_URL", "http://127.0.0.1:8200"), os.environ["MO_API_TOKEN"])
-            sessions = DemoSessions(ai, middle)
-        except (KeyError, ValueError) as error:
-            parser.error(f"invalid integrated configuration: {error}")
+            raise SystemExit(subprocess.call(command))
+        except KeyboardInterrupt:
+            return
+
+    try:
+        ai = JsonService("ai", os.getenv("HARBOR_AI_URL", "http://127.0.0.1:8000"), os.environ["AI_MVP_API_TOKEN"], timeout=450)
+        middle = JsonService("middle_office", os.getenv("HARBOR_MIDDLE_URL", "http://127.0.0.1:8200"), os.environ["MO_API_TOKEN"])
+        sessions = DemoSessions(ai, middle)
+    except (KeyError, ValueError) as error:
+        parser.error(f"invalid integrated configuration: {error}")
     server, port = create_server(sessions, port=args.port)
     url = f"http://{HOST}:{port}/index.html"
 
@@ -201,7 +212,7 @@ def main():
         threading.Timer(0.8, lambda: webbrowser.open(url)).start()
 
     print("")
-    print("Harbor Invest UI preview is running.")
+    print("Harbor Invest gateway is running.")
     print(f"Open: {url}")
     print("Press Ctrl+C to stop the server.")
     print("")

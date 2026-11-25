@@ -19,7 +19,11 @@ python -X utf8 check_integration.py --live-market
 
 第一条命令启动三个 HTTP 服务。打开终端打印的本机网址，通常为 `http://127.0.0.1:5510/`。输入演示账户名（如 `student_demo`）进入工作台。首次使用该名称会创建模拟账户，未做风险测评时会显示问卷，也可以稍后填写。点击顶部「切换账户」可退出当前会话；在同一次演示运行中，重输同名可继续使用原来的余额、持仓、订单和画像。`--live-market` 读取真实现货报价，账户和订单仍在本地模拟。省略该参数即可离线演示，使用两家模拟报价来源。退出演示会清理临时数据库。第二条命令独立复测离线流程及公开行情。
 
-模型默认用模板。用 `python run_demo.py --ollama-model <本机已安装的模型>` 接 Ollama。需要 DeepSeek 时，在当前进程环境设置 `DEEPSEEK_API_KEY` 后加 `--enable-deepseek`。同时启用时，先尝试 Ollama；远程调用沿用 AI 模块对账户数据的限制。DeepSeek 请求使用该 Key 的 API 额度。
+仓库只运行一套联调版。可用 `python run_demo.py` 启动，也可在 Windows 双击 `frontend/start_preview.bat`。直接打开 `frontend/index.html` 会显示启动命令。
+
+登录后，在聊天助手右上角打开「模型设置」。本地 Ollama 会列出本机已安装的模型。选择 DeepSeek API 时填入自己的 Key，并确认按用量计费。Key 只保留在本次登录会话的服务端内存里，保存设置不会发起 DeepSeek 调用。聊天会标注实际使用的模型或内置回复。涉及持仓或挂单的账户上下文只用于本机处理。
+
+启动时也可用 `--ollama-model <本机已安装的模型>`，或在进程环境设置 `DEEPSEEK_API_KEY` 后加 `--enable-deepseek`。两种启动配置同时启用时，优先尝试 Ollama。未配置模型时使用内置回复。
 
 分别启动时，在 `middle-office/` 运行 `python -m middle_office --public-market`，在 `ai/` 运行 `python -m ai_mvp`，再运行 `python frontend/UI.py --integrated --no-browser`。服务从进程环境读取 [`.env.example`](.env.example) 列出的变量。`MO_AI_READ_TOKEN` 与 `MO_API_TOKEN` 取不同值，`AI_MVP_MARKET_TOKEN` 和 `AI_MVP_TRADING_TOKEN` 使用 `MO_AI_READ_TOKEN`。启用公开行情时为 AI 设置 `AI_MVP_MARKET_ALL_SOURCES=1` 和 `AI_MVP_QUOTE_MAX_AGE_SECONDS=45`。演示账户由中台在首次登录时创建，无需提前准备。
 
@@ -44,6 +48,6 @@ python -X utf8 check_integration.py --live-market
 - 模拟账户只供本机访问。仅凭名称选择账户，不验证身份；知道名称的人可以进入同一演示账户。请勿使用真实凭证或敏感数据。
 - 公开行情展示买卖一档及数量，报价排名未纳入账户交易费、完整订单簿或滑点。数量大于一档挂单时标记深度不足。演示账本用公开报价模拟成交时将未知手续费按零处理，并在预览提示。
 - AI 与前端都能看到多来源报价。持仓估值仍以新鲜参考价为基础，AI 风险统计与中台账本估值使用各自快照。历史走势、报表导出、资金划转和自选管理仍是原型功能。
-- 默认 HTTP 联调验证的是模板回答和三模块数据流，Ollama 与 DeepSeek 的实际生成需在对应模型可用时分别验证。
+- HTTP 联调覆盖内置回复、三模块数据流和模拟 DeepSeek 请求。真实模型生成需要本机 Ollama 或有效的 DeepSeek Key。
 
 协作约定见 [CLAUDE.md](CLAUDE.md)。

@@ -18,6 +18,18 @@
       box-sizing: border-box;
     }
 
+    body:not([data-integrated="true"]) #digital-asset-ui,
+    body[data-integrated="true"] #launch-instructions {
+      display: none;
+    }
+
+    #launch-instructions {
+      margin: 48px auto;
+      padding: 0 20px;
+      max-width: 36rem;
+      font: 16px/1.6 system-ui, sans-serif;
+    }
+
     @media (max-width: 560px) {
       body {
         padding: 0;
@@ -108,7 +120,11 @@
   </style>
 </head>
 <body>
-<div id="digital-asset-ui" class="da-app" aria-label="多平台数字资产投资台 UI 原型">
+<main id="launch-instructions" lang="zh-CN">
+  <h1>Harbor Invest</h1>
+  <p>请在仓库根目录运行 <code>python run_demo.py</code>，然后打开终端显示的网址。</p>
+</main>
+<div id="digital-asset-ui" class="da-app" aria-label="多平台数字资产投资台">
   <header class="da-topbar">
     <div class="da-brand">
       <div class="da-brandmark" aria-hidden="true">H</div>
@@ -552,53 +568,45 @@
               <div class="da-assistant-avatar"><i data-lucide="sparkles" aria-hidden="true"></i></div>
               <div>
                 <h2>Harbor AI</h2>
-                <p><span class="da-online-dot"></span> 已连接市场数据与监管知识库</p>
+                <small id="reply-model" hidden></small>
               </div>
-              <button class="da-iconbtn da-iconbtn-light" type="button" aria-label="新建对话"><i data-lucide="square-pen" aria-hidden="true"></i></button>
+              <div class="da-model-actions">
+                <button class="da-rowbtn" id="model-settings-open" type="button" aria-haspopup="dialog">模型设置</button>
+                <button class="da-iconbtn da-iconbtn-light" id="new-chat" type="button" aria-label="新建对话"><i data-lucide="square-pen" aria-hidden="true"></i></button>
+              </div>
             </div>
 
-            <div class="da-messages">
-              <div class="da-message da-message-user">
-                <div class="da-bubble">现在买 BTC，HashKey 和 OSL 哪个总成本更低？</div>
-                <span class="da-msgtime">14:31</span>
-              </div>
-              <div class="da-message da-message-ai">
-                <div class="da-assistant-avatar"><i data-lucide="sparkles" aria-hidden="true"></i></div>
-                <div>
-                  <div class="da-bubble">
-                    <p>按当前 0.5 BTC 的报价测算，<strong>HashKey 的预估总成本为 US$ 48.72，低于 OSL 的 US$ 55.02</strong>。差异主要来自更小的价差和预估滑点。</p>
-                    <div class="da-answer-compare">
-                      <div>
-                        <span>HashKey</span>
-                        <strong>US$ 48.72</strong>
-                        <small>价差 + 手续费 + 滑点</small>
-                      </div>
-                      <div>
-                        <span>OSL</span>
-                        <strong>US$ 55.02</strong>
-                        <small>多 US$ 6.30</small>
-                      </div>
-                    </div>
-                    <p>这是基于你当前“买入 0.5 BTC”操作上下文给出的成本比较。执行前仍需在订单确认页核对实时价格与费用。</p>
-                  </div>
-                  <div class="da-citations">
-                    <button type="button"><span>1</span>交易所实时报价 · 14:32</button>
-                    <button type="button"><span>2</span>费用与滑点计算说明</button>
-                  </div>
-                  <div class="da-msg-actions">
-                    <button type="button"><i data-lucide="copy" aria-hidden="true"></i> 复制</button>
-                    <button type="button"><i data-lucide="thumbs-up" aria-hidden="true"></i> 有帮助</button>
-                    <button type="button"><i data-lucide="rotate-ccw" aria-hidden="true"></i> 重新回答</button>
-                  </div>
+            <dialog id="model-settings" aria-labelledby="model-settings-title">
+              <form id="model-settings-form">
+                <h2 id="model-settings-title">模型设置</h2>
+                <label for="model-provider">模型来源</label>
+                <select id="model-provider" autofocus>
+                  <option value="default">启动时配置</option>
+                  <option value="ollama">本地 Ollama</option>
+                  <option value="deepseek">DeepSeek API</option>
+                </select>
+                <div id="ollama-fields" class="da-model-fields" hidden>
+                  <label for="ollama-model">已安装模型</label>
+                  <select id="ollama-model"></select>
                 </div>
-              </div>
-            </div>
+                <div id="deepseek-fields" class="da-model-fields" hidden>
+                  <label for="deepseek-key">DeepSeek API Key</label>
+                  <input id="deepseek-key" type="password" maxlength="512" autocomplete="off" spellcheck="false">
+                  <label class="da-model-consent">
+                    <input id="deepseek-agree" type="checkbox">
+                    <span>同意将对话与风险画像发送给 DeepSeek，并按用量计费。</span>
+                  </label>
+                </div>
+                <p id="model-settings-status" role="status"></p>
+                <div class="da-model-actions">
+                  <button class="da-rowbtn" id="model-settings-cancel" type="button">关闭</button>
+                  <button class="da-primary" id="model-settings-save" type="submit">保存模型设置</button>
+                </div>
+              </form>
+            </dialog>
 
-            <div class="da-prompts" aria-label="快捷问题">
-              <button type="button">什么是滑点？</button>
-              <button type="button">稳定币理财与货币基金有什么区别？</button>
-              <button type="button">我的风险等级可以交易哪些产品？</button>
-            </div>
+            <div class="da-messages" aria-live="polite"></div>
+
             <form class="da-composer" id="assistant-form">
               <label class="sr-only" for="assistant-input">向聊天助手提问</label>
               <textarea id="assistant-input" rows="2" placeholder="询问产品、费用、市场概念或监管规则…"></textarea>
@@ -2055,16 +2063,53 @@
   .da-chathead > div:nth-child(2) {
     display: grid;
     gap: 1px;
+    min-width: 0;
   }
 
-  .da-chathead p {
+  #reply-model {
     color: var(--da-muted);
-    font-size: 8px;
+    font-size: 11px;
+    overflow-wrap: anywhere;
   }
 
-  .da-chathead .da-iconbtn {
+  .da-model-actions {
+    display: flex;
+    flex: 0 0 auto;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 8px;
     margin-left: auto;
   }
+
+  #model-settings {
+    width: min(400px, calc(100% - 32px));
+    padding: 20px;
+    border: 1px solid var(--da-line);
+    border-radius: 14px;
+    background: var(--da-surface);
+    color: inherit;
+    font-size: 13px;
+  }
+
+  #model-settings::backdrop { background: rgb(9 17 22 / .6); }
+
+  #model-settings-form, .da-model-fields { display: grid; gap: 8px; }
+  #model-settings label { margin-top: 4px; }
+  #model-settings :is(select, input[type="password"]) {
+    width: 100%;
+    min-height: 36px;
+    padding: 6px 8px;
+    border: 1px solid var(--da-line);
+    border-radius: 8px;
+    background: var(--da-surface-2);
+    color: inherit;
+    font: inherit;
+  }
+  .da-model-consent { display: flex; align-items: center; gap: 8px; }
+  #model-settings-status { color: var(--da-muted); }
+  #model-settings-status:empty { display: none; }
+  #model-settings .da-primary { padding-inline: 12px; }
+  #model-settings button:disabled { opacity: .55; cursor: default; }
 
   .da-assistant-avatar {
     width: 31px;
@@ -2779,7 +2824,7 @@
 <script>
   (() => {
     const root = document.getElementById("digital-asset-ui");
-    if (!root) return;
+    if (document.body.dataset.integrated !== "true") return;
 
     const ZH_TO_EN = Object.freeze({
       "多平台数字资产投资台": "Multi-Platform Digital Asset Desk",
@@ -2938,12 +2983,18 @@
       "11-06 · 买入": "11-06 · Buy",
       "11-03 · 买入": "11-03 · Buy",
       "10-28 · 申购": "10-28 · Subscribe",
-      "已进入订单确认 · 原型演示": "Order Review Opened · Prototype",
-      "原型演示：问题已记录": "Prototype: Question Recorded"
+      "模型设置": "Model settings",
+      "模型来源": "Model source",
+      "启动时配置": "Startup defaults",
+      "本地 Ollama": "Local Ollama",
+      "已安装模型": "Installed model",
+      "同意将对话与风险画像发送给 DeepSeek，并按用量计费。": "I agree to send chat messages and my risk profile to DeepSeek and pay for API usage.",
+      "关闭": "Close",
+      "保存模型设置": "Save model settings"
     });
 
     const ATTRIBUTE_LABELS = Object.freeze({
-      "多平台数字资产投资台 UI 原型": "Multi-Platform Digital Asset Investment Desk UI Prototype",
+      "多平台数字资产投资台": "Multi-Platform Digital Asset Investment Desk",
       "通知": "Notifications",
       "用户 Leo": "User Leo",
       "主导航": "Main Navigation",
@@ -3012,21 +3063,6 @@
       });
     }
 
-    function localizeDynamicContent() {
-      root.querySelectorAll("[data-i18n-source]").forEach((element) => {
-        element.textContent = translateText(element.dataset.i18nSource);
-      });
-
-      const assistantInput = root.querySelector("#assistant-input");
-      if (assistantInput?.dataset.dynamicPlaceholder === "recorded") {
-        const source = "原型演示：问题已记录";
-        assistantInput.placeholder = translateText(source);
-        const records = attributeOriginals.get(assistantInput) ?? {};
-        records.placeholder = source;
-        attributeOriginals.set(assistantInput, records);
-      }
-    }
-
     function applyLanguage(language) {
       currentLanguage = language === "en" ? "en" : "zh";
       document.documentElement.lang = currentLanguage === "en" ? "en" : "zh-CN";
@@ -3043,7 +3079,6 @@
       }
       nodes.forEach(translateTextNode);
       translateAttributes();
-      localizeDynamicContent();
 
       if (languageToggle) {
         const label = languageToggle.querySelector("span");
@@ -3057,9 +3092,7 @@
 
     languageToggle?.addEventListener("click", () => {
       applyLanguage(currentLanguage === "zh" ? "en" : "zh");
-      if (document.body.dataset.integrated === "true") {
-        try { localStorage.setItem("harbor-language", currentLanguage); } catch {}
-      }
+      try { localStorage.setItem("harbor-language", currentLanguage); } catch {}
       document.dispatchEvent(new Event("harbor-language"));
     });
 
@@ -3102,68 +3135,16 @@
     });
 
     const amount = root.querySelector("#order-amount");
-    const integrated = document.body.dataset.integrated === "true";
-    const notional = root.querySelector("#order-notional");
-    const fee = root.querySelector("#order-fee");
-    const total = root.querySelector("#order-total");
-    const price = 68420.10;
-
-    function formatUsd(value) {
-      return `US$ ${value.toLocaleString("en-US", {
-        minimumFractionDigits: 2,
-        maximumFractionDigits: 2
-      })}`;
-    }
-
-    function updateOrder() {
-      if (integrated) return;
-      const quantity = Math.max(0, Number(amount?.value || 0));
-      const base = quantity * price;
-      const feeValue = base * 0.002;
-      const slippage = base * 0.0003;
-      if (notional) notional.textContent = formatUsd(base);
-      if (fee) fee.textContent = formatUsd(feeValue);
-      if (total) total.textContent = formatUsd(base + feeValue + slippage);
-    }
-
-    amount?.addEventListener("input", updateOrder);
     root.querySelectorAll("[data-amount]").forEach((button) => {
       button.addEventListener("click", () => {
         if (!amount) return;
         amount.value = button.dataset.amount;
-        updateOrder();
+        amount.dispatchEvent(new Event("input"));
       });
-    });
-
-    const assistantInput = root.querySelector("#assistant-input");
-    root.querySelectorAll(".da-prompts button").forEach((button) => {
-      button.addEventListener("click", () => {
-        if (!assistantInput) return;
-        assistantInput.value = button.textContent;
-        assistantInput.focus();
-      });
-    });
-
-    root.querySelector("#assistant-form")?.addEventListener("submit", (event) => {
-      event.preventDefault();
-      if (integrated) return;
-      if (!assistantInput || !assistantInput.value.trim()) return;
-      assistantInput.value = "";
-      assistantInput.dataset.dynamicPlaceholder = "recorded";
-      assistantInput.placeholder = translateText("原型演示：问题已记录");
-    });
-
-    root.querySelector("#submit-order")?.addEventListener("click", (event) => {
-      if (integrated) return;
-      const button = event.currentTarget;
-      button.dataset.i18nSource = "已进入订单确认 · 原型演示";
-      button.textContent = translateText(button.dataset.i18nSource);
     });
 
     let preferredLanguage = "en";
-    if (integrated) {
-      try { preferredLanguage = localStorage.getItem("harbor-language") ?? preferredLanguage; } catch {}
-    }
+    try { preferredLanguage = localStorage.getItem("harbor-language") ?? preferredLanguage; } catch {}
     applyLanguage(preferredLanguage);
   })();
 </script>
