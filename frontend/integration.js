@@ -81,8 +81,8 @@
     bilingual(one("#account-login-description"), "输入账户名继续。首次使用该名称时会自动创建模拟账户。",
       "Enter an account name to continue. A new name creates a simulation account.");
     bilingual(one('label[for="account-name"]'), "账户名", "Account name");
-    bilingual(one("#account-login-hint"), "可用英文字母、数字、下划线和连字符，最多 64 个字符。",
-      "Up to 64 letters (A–Z), digits, underscores or hyphens.");
+    bilingual(one("#account-login-hint"), "测试账户 demo_c1 至 demo_c5 对应五个风险等级。",
+      "Test accounts demo_c1 through demo_c5 cover the five risk levels.");
     bilingual(one(".da-login-note"), "仅用于模拟，不验证身份。请勿输入真实账号或密码。",
       "Simulation only. Identity is not verified. Do not enter real credentials.");
     bilingual(submit, "登录", "Sign in");
@@ -146,7 +146,7 @@
     "#screen-compare .da-headactions .da-primary, #screen-trade .da-headactions, .da-watchlist .da-iconbtn, " +
     ".da-watchlist-head, .da-watchfoot, .da-watchrow > :not(.da-asset), .da-quickamounts, " +
     ".da-order-summary > div:nth-child(3), .da-context-panel, #screen-account .da-headactions, " +
-    ".da-account-grid, .da-holdings .da-textbtn, .da-screen .da-pagehead p, " +
+    ".da-account-grid, .da-screen .da-pagehead p, " +
     ".da-order-note, .da-order .da-panelhead p, .da-precheck strong, .da-chat-disclaimer");
   bilingual(one(".da-status"), "模拟账户", "Simulation account");
   bilingual(one("#trade-title"), "模拟下单", "Simulated order");
@@ -706,6 +706,11 @@
   bilingual(cards[1].querySelector("span"), "未实现盈亏", "Unrealized P&L");
   hide(".da-kpis-account .da-kpi small");
   const accountTime = one(".da-holdings .da-panelhead p");
+  const tradeHistory = one("#trade-history tbody");
+  const historyStatus = one("#trade-history-status");
+  const historyMore = one("#trade-history-more");
+  const loadedTradeIds = new Set();
+  let historyOffset = 0;
   let accountVersion = 0;
 
   function loadOpenOrders(orders) {
@@ -733,10 +738,46 @@
     pending.replaceChildren(heading, list);
   }
 
+  async function loadTradeHistory(version, offset) {
+    historyMore.disabled = true;
+    bilingual(historyStatus, "正在读取成交记录…", "Loading trades…");
+    try {
+      const query = new URLSearchParams({ offset, limit: 20, sort: "newest" });
+      const { trades, total } = await request(`/api/account/transactions?${query}`);
+      if (version !== accountVersion) return;
+      for (const trade of trades) {
+        if (loadedTradeIds.has(trade.trade_id)) continue;
+        loadedTradeIds.add(trade.trade_id);
+        const direction = node("span");
+        if (trade.side === "buy") bilingual(direction, "买入", "Buy");
+        else bilingual(direction, "卖出", "Sell");
+        tableRow(tradeHistory, [trade.symbol, direction, trade.quantity,
+          money(trade.price, trade.symbol.split("/")[1]), trade.source, time(trade.as_of)]);
+      }
+      historyOffset = offset + trades.length;
+      historyMore.hidden = historyOffset >= total;
+      if (total === 0) bilingual(historyStatus, "暂无成交记录", "No trades yet");
+      else text(historyStatus, "");
+    } catch {
+      if (version === accountVersion) {
+        bilingual(historyStatus, "成交记录暂不可用。", "Trade history unavailable.");
+      }
+    } finally {
+      if (version === accountVersion) historyMore.disabled = false;
+    }
+  }
+
+  historyMore.addEventListener("click", () => loadTradeHistory(accountVersion, historyOffset));
+
   async function loadAccount() {
     const version = ++accountVersion;
     holdings.replaceChildren();
     pending.replaceChildren();
+    tradeHistory.replaceChildren();
+    loadedTradeIds.clear();
+    historyOffset = 0;
+    historyMore.hidden = true;
+    loadTradeHistory(version, 0);
     text(accountTime, "—");
     text(riskNotice, "");
     text(one(".da-railsummary strong"), "—");

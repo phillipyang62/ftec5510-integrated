@@ -10,6 +10,7 @@ from time import monotonic
 from urllib.parse import parse_qs, urlencode, urlsplit
 from uuid import uuid4
 
+from demo_accounts import DEMO_ACCOUNTS
 from questionnaire import QuestionnaireError, assess, public_bank
 
 
@@ -94,9 +95,18 @@ class DemoSessions:
         with self.lock:
             account = self.accounts.get(name)
             if account is None:
-                status, data = self.middle.request("POST", "/api/accounts/" + name, self.account_seed)
+                preset = DEMO_ACCOUNTS.get(name)
+                path = "/api/accounts/" + name
+                status, data = self.middle.request("POST", path, preset["ledger"] if preset else self.account_seed)
                 if status != 201 and not (status == 409 and data.get("error", {}).get("code") == "account_exists"):
                     raise GatewayError(502, "account_unavailable", "Could not open the simulation account")
+                if preset:
+                    assessment_path = path + "/assessment"
+                    status, result = self.middle.request("GET", assessment_path)
+                    if status == 404 and result.get("error", {}).get("code") == "assessment_not_found":
+                        status, _ = self.middle.request("PUT", assessment_path, preset["profile"])
+                    if status != 200:
+                        raise GatewayError(502, "assessment_unavailable", "Could not open the preset assessment")
                 account = self.accounts[name] = Gateway(self.ai, self.middle, name)
             now = monotonic()
             self.sessions = {token: record for token, record in self.sessions.items() if record.expires_at > now}
@@ -269,7 +279,7 @@ class Gateway:
         if path == "/api/account/summary" and method == "GET":
             return self.middle.request(method, self.account_path + "/analysis_snapshot")
         if path == "/api/account/transactions" and method == "GET":
-            return self.middle.request(method, self.account_path + "/trades" + query_string(params, "offset", "limit"))
+            return self.middle.request(method, self.account_path + "/trades" + query_string(params, "offset", "limit", "sort"))
         if path == "/api/orders/preview" and method == "POST":
             return self._preview(body)
         if path == "/api/orders" and method == "POST":

@@ -123,6 +123,8 @@ class Handler(BaseHTTPRequestHandler):
                 require(offset.isascii() and offset.isdigit() and len(offset) <= 8 and limit.isascii()
                         and limit.isdigit() and 1 <= int(limit) <= 500, "invalid_page", "invalid offset or limit")
                 rows = office.records(user, action)
+                if action == "trades" and params.get("sort") == ["newest"]:
+                    rows.reverse()
                 return 200, {action: rows[int(offset):int(offset) + int(limit)], "total": len(rows)}
         raise BusinessError("not_found", "unknown endpoint", 404)
 

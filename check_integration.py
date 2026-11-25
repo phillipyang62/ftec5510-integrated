@@ -291,6 +291,47 @@ def trade(ui):
     return pending["order_id"]
 
 
+def check_preset_accounts(url):
+    ui = BrowserClient(url)
+    history_path = "/api/account/transactions?sort=newest"
+    empty_history = {"trades": [], "total": 0}
+    for level, rai in enumerate((20, 35, 61, 74, 90), 1):
+        account = f"demo_c{level}"
+        checked(ui, "POST", "/api/session", {"account_name": account})
+        profile = checked(ui, "GET", "/api/profile")
+        assert profile["source"] == "demo_preset"
+        assert profile["assessment"]["risk_level"] == f"C{level}" and profile["assessment"]["rai"] == rai
+        portfolio = checked(ui, "GET", "/api/account/summary")["portfolio"]
+        assert Decimal(portfolio["balances"][0]["available"]) >= 12000 and portfolio["positions"]
+        assert checked(ui, "GET", "/api/orders")["orders"] == []
+        assert checked(ui, "GET", history_path) == empty_history
+
+    checked(ui, "POST", "/api/session", {"account_name": "demo_c1"})
+    buy = {"symbol": "BTC/USDT", "side": "buy", "order_type": "market", "quantity": "0.01"}
+    preview = checked(ui, "POST", "/api/orders/preview", buy)
+    assert preview["suitability_warning"]["risk_level"] == "C1"
+    assert checked(ui, "GET", history_path) == empty_history
+    first = checked(ui, "POST", "/api/orders", {"preview_id": preview["preview_id"]})
+    second_preview = checked(ui, "POST", "/api/orders/preview", {**buy, "side": "sell", "quantity": "0.005"})
+    second = checked(ui, "POST", "/api/orders", {"preview_id": second_preview["preview_id"]})
+    assert first["status"] == second["status"] == "filled"
+    history = checked(ui, "GET", history_path)
+    assert [trade["trade_id"] for trade in history["trades"]] == [second["trade_id"], first["trade_id"]]
+    first_page = checked(ui, "GET", history_path + "&offset=0&limit=1")
+    second_page = checked(ui, "GET", history_path + "&offset=1&limit=1")
+    assert first_page["trades"] + second_page["trades"] == history["trades"]
+    limit = checked(ui, "POST", "/api/orders/preview", {**buy, "order_type": "limit", "limit_price": "65000"})
+    assert checked(ui, "POST", "/api/orders", {"preview_id": limit["preview_id"]})["status"] == "open"
+    assert checked(ui, "GET", history_path) == history
+    checked(ui, "PUT", "/api/profile", ASSESSMENT)
+    checked(ui, "DELETE", "/api/session")
+    checked(ui, "POST", "/api/session", {"account_name": "demo_c1"})
+    assert checked(ui, "GET", "/api/profile")["assessment"]["risk_level"] == "C3"
+    assert checked(ui, "GET", history_path) == history
+    checked(ui, "POST", "/api/session", {"account_name": "demo_c2"})
+    assert checked(ui, "GET", history_path) == empty_history
+
+
 def offline_checks():
     with demo_stack(ui_port=0) as (middle, ai, reader, url):
         ui = BrowserClient(url)
@@ -303,6 +344,9 @@ def offline_checks():
         check_sign_in(ui)
         assert checked(ui, "GET", "/api/market/catalog") == {"market_mode": "simulation", "pairs": {}}
         print("PASS account-name sign-in, session cookie, and anonymous access check")
+
+        check_preset_accounts(url)
+        print("PASS five preset assessments, starting holdings, and histories populated only by fills")
 
         check_session_models(url)
         print("PASS mocked DeepSeek, OpenAI and Gemini calls, consent, provider key isolation and account privacy")

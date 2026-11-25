@@ -161,7 +161,7 @@
         <input id="account-name" name="account_name" type="text" autocomplete="username" autocapitalize="none"
           spellcheck="false" maxlength="64" required placeholder="student_demo"
           aria-describedby="account-login-hint account-login-status">
-        <small id="account-login-hint">可用英文字母、数字、下划线和连字符，最多 64 个字符。</small>
+        <small id="account-login-hint">测试账户 demo_c1 至 demo_c5 对应五个风险等级。</small>
         <button class="da-primary" id="account-login-submit" type="submit">登录</button>
         <p id="account-login-status" role="status"></p>
       </form>
@@ -761,44 +761,34 @@
         <article class="da-panel da-holdings">
           <div class="da-panelhead">
             <div>
-              <h2>持仓与近期交易</h2>
-              <p>最近一次同步：2026-11-08 14:32:08 HKT</p>
+              <h2>持仓与挂单</h2>
+              <p>—</p>
             </div>
-            <button class="da-textbtn" type="button">全部交易记录 <i data-lucide="chevron-right" aria-hidden="true"></i></button>
           </div>
           <div class="da-tablewrap">
             <table class="da-table">
               <thead>
-                <tr><th>资产</th><th>数量</th><th>市值</th><th>未实现盈亏</th><th>托管平台</th><th>最近交易</th></tr>
+                <tr><th>资产</th><th>数量</th><th>市值</th><th>未实现盈亏</th><th>估值报价来源</th><th>报价时间（UTC）</th></tr>
               </thead>
-              <tbody>
-                <tr>
-                  <td><span class="da-asset-compact"><b class="da-coin da-coin-btc">₿</b><strong>Bitcoin</strong></span></td>
-                  <td>0.842 BTC</td>
-                  <td>HK$ 591,142.60</td>
-                  <td class="da-positive">+HK$ 42,186.20</td>
-                  <td>HashKey</td>
-                  <td>11-06 · 买入</td>
-                </tr>
-                <tr>
-                  <td><span class="da-asset-compact"><b class="da-coin da-coin-eth">Ξ</b><strong>Ethereum</strong></span></td>
-                  <td>11.26 ETH</td>
-                  <td>HK$ 270,684.30</td>
-                  <td class="da-positive">+HK$ 9,842.11</td>
-                  <td>OSL</td>
-                  <td>11-03 · 买入</td>
-                </tr>
-                <tr>
-                  <td><span class="da-asset-compact"><b class="da-coin da-coin-cash">$</b><strong>USDC 活期理财</strong></span></td>
-                  <td>28,420 USDC</td>
-                  <td>HK$ 221,906.00</td>
-                  <td class="da-positive">+HK$ 1,104.20</td>
-                  <td>HashKey</td>
-                  <td>10-28 · 申购</td>
-                </tr>
-              </tbody>
+              <tbody></tbody>
             </table>
           </div>
+        </article>
+
+        <article class="da-panel da-trade-history" id="trade-history" aria-labelledby="trade-history-title">
+          <div class="da-panelhead">
+            <h2 id="trade-history-title">交易历史</h2>
+            <button class="da-rowbtn" id="trade-history-more" type="button" hidden>加载更多成交</button>
+          </div>
+          <div class="da-tablewrap">
+            <table class="da-table">
+              <thead>
+                <tr><th>交易对</th><th>方向</th><th>数量</th><th>成交价</th><th>来源</th><th>成交时间（UTC）</th></tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+          <p class="da-integration-notice" id="trade-history-status" role="status"></p>
         </article>
       </section>
     </main>
@@ -2642,6 +2632,11 @@
     overflow: hidden;
   }
 
+  .da-trade-history {
+    margin-top: 14px;
+    overflow: hidden;
+  }
+
   .da-asset-compact {
     gap: 6px;
   }
@@ -2974,11 +2969,13 @@
       "数量": "Quantity",
       "市值": "Market Value",
       "未实现盈亏": "Unrealized P&L",
-      "托管平台": "Custodian Venue",
-      "最近交易": "Latest Trade",
-      "11-06 · 买入": "11-06 · Buy",
-      "11-03 · 买入": "11-03 · Buy",
-      "10-28 · 申购": "10-28 · Subscribe",
+      "交易历史": "Trade history",
+      "加载更多成交": "Load more trades",
+      "交易对": "Pair",
+      "方向": "Side",
+      "成交价": "Execution price",
+      "来源": "Source",
+      "成交时间（UTC）": "Execution time (UTC)",
       "模型设置": "Model settings",
       "模型来源": "Model source",
       "启动时配置": "Startup defaults",

@@ -21,6 +21,8 @@ python -X utf8 check_integration.py --live-market
 
 仓库只运行一套联调版。可用 `python run_demo.py` 启动，也可在 Windows 双击 `frontend/start_preview.bat`。直接打开 `frontend/index.html` 会显示启动命令。
 
+调试时可直接输入 `demo_c1`、`demo_c2`、`demo_c3`、`demo_c4` 或 `demo_c5` 登录，对应风险等级 C1 至 C5。五个账户预设了测评、USDT 余额和持仓。新建测试账户的交易历史为空，模拟订单成交后才写入。查看具体预设和验证步骤见[测试账户改动说明](改动说明-测试账户与交易历史.md)。
+
 登录后，在聊天助手右上角打开「模型设置」。可选择本地 Ollama，或选择 DeepSeek、OpenAI、Gemini 并填入对应平台的 API Key。三个 API 默认使用 `deepseek-flash`、`gpt-4.1-mini`、`gemini-3.1-flash-lite`。Key 只保留在本次登录会话的服务端内存里，费用按实际发出的请求和所选平台规则计算。聊天会标注实际使用的模型或内置回复。涉及持仓或挂单的账户上下文只用于本机处理。
 
 启动时也可用 `--ollama-model <本机已安装的模型>`，或在进程环境设置 `DEEPSEEK_API_KEY` 后加 `--enable-deepseek`。两种启动配置同时启用时，优先尝试 Ollama。未配置模型时使用内置回复。

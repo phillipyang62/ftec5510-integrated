@@ -20,6 +20,7 @@
 - `POST /api/session` 接收 `{"account_name":"student_demo"}`。名称去除首尾空白后必须为 1–64 个英文字母、数字、下划线或连字符，区分大小写。若账户不存在则创建模拟账本；返回当前 `account_name` 并设置有效期 8 小时的 `HttpOnly; SameSite=Strict` 会话 Cookie。
 - `GET /api/session` 返回当前 `account_name`（未登录时为 `null`）；`DELETE /api/session` 使当前会话失效并清除 Cookie。除健康检查和会话路由外，BFF 依据会话选择账户，未登录返回 `401`。
 - 页面发送 `X-Harbor-Account` 仅检测其他标签页是否已切换账户；该字段不能授予访问权限。此流程是本机模拟账户选择，不验证账号所有权，也不应对公网开放。
+- `demo_c1` 至 `demo_c5` 分别预设 C1 至 C5 风险等级。首次创建时中台登记初始余额和持仓。缺少测评时网关写入预设结果，`source` 为 `demo_preset`。读取画像时同步到 AI。重新登录沿用已存在的账户、测评和记录。
 
 ### 服务状态
 
@@ -238,6 +239,8 @@ DELETE /api/watchlist/{symbol}
 ```
 
 账户金额必须包含币种和时间戳。空账户与接口不可用必须是不同状态。
+
+`GET /api/account/transactions?offset=0&limit=20&sort=newest` 返回中台的 `trades` 和 `total`，用于账户页的交易历史。`sort=newest` 按成交入账倒序分页，省略时沿用中台入账顺序。初始持仓、订单预览和未成交挂单均不会生成成交记录。
 
 ## 6. 错误格式
 
