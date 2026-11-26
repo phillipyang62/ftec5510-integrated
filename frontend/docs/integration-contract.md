@@ -124,7 +124,7 @@ GET /v1/risk/{user_id}?quote_currency=USDT
 
 ## 3. 行情边界
 
-`GET /api/market/catalog` 由 BFF 转发给中台，返回 `market_mode` 和 `pairs`。`pairs` 的键是交易对，值是已配置的报价来源数组，例如 `{"BTC/USD":["HashKey","OSL"]}`。前端使用目录生成币种和计价币选项。报价及可用状态仍以 `GET /api/market/venues` 中返回的具体交易对为准。离线模式沿用模拟交易对。
+`GET /api/market/catalog` 由 BFF 转发给中台，返回 `market_mode` 和 `pairs`。`pairs` 的键是交易对，值是已配置的报价来源数组。前端使用目录生成币种和计价币选项。报价及可用状态以 `GET /api/market/venues` 中返回的具体交易对为准；其中 `quote_mode` 区分模拟报价（`simulation`）与公开交易所报价（`public`），不改变整套服务的 `market_mode`。BTC/ETH 模拟来源以 `demo:MDGateway:` 开头，提交订单预览时应使用完整来源标识。SOL 和其他币种不变，离线演示继续使用原有模拟报价。
 
 AI 后端的 `/v1/market/quotes` 是单交易对参考价：
 

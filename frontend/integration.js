@@ -165,6 +165,7 @@
   let side = "buy";
   let marketVersion = 0;
   let marketTimer;
+  let marketRefreshMs;
   const amount = one("#order-amount");
   const kind = one("#order-type");
   const limit = one("#order-limit");
@@ -174,6 +175,7 @@
   const publicAsset = one("#public-asset");
   const publicPairFilter = one("#public-pair-filter");
   const publicPair = one("#public-pair");
+  const allQuoteCurrencies = "all";
   const spotAssets = new Map();
   bilingual(publicAssetFilter.querySelector("span"), "币种", "Asset");
   bilingual(publicPairFilter.querySelector("span"), "计价币", "Quote currency");
@@ -247,6 +249,10 @@
     venue.replaceChildren(automatic);
     for (const quote of quotes) {
       const option = node("option", quote.source);
+      if (quote.source.startsWith("demo:MDGateway:")) {
+        const name = venueName(quote.source);
+        bilingual(option, `${name}（模拟）`, `${name} (simulated)`);
+      }
       option.value = quote.source;
       venue.append(option);
     }
@@ -260,15 +266,22 @@
     venue.value = selected;
   }
 
+  function venueName(source) {
+    return source.replace(/^demo:MDGateway:/, "");
+  }
+
   function refreshQuoteCurrencies() {
     const choices = spotAssets.get(publicAsset.value);
-    publicPair.replaceChildren(...choices.map(({ symbol, currency }) => new Option(currency, symbol)));
+    const keepAll = publicPair.value === allQuoteCurrencies;
+    const allCurrencies = new Option("", allQuoteCurrencies);
+    bilingual(allCurrencies, "所有", "All");
+    publicPair.replaceChildren(allCurrencies, ...choices.map(({ symbol, currency }) => new Option(currency, symbol)));
     const preferred = choices.find(({ currency, sources }) =>
-      currency === "USD" && sources.includes("HashKey") && sources.includes("OSL"))
+      currency === "USD" && ["HashKey", "OSL"].every((name) => sources.map(venueName).includes(name)))
       ?? choices.find(({ currency, sources }) => currency === "USDT" && sources.length >= 2)
       ?? choices.find(({ sources }) => sources.length >= 2)
       ?? choices[0];
-    publicPair.value = preferred.symbol;
+    publicPair.value = keepAll ? allQuoteCurrencies : preferred.symbol;
   }
 
   async function initializeMarket() {
@@ -298,12 +311,63 @@
     return request(`/api/market/venues?${query}`);
   }
 
+  function renderQuoteRows(result) {
+    const { symbol, venues, market_mode: mode, quote_mode: quoteMode, ranking_basis: ranking } = result;
+    const publicMarket = mode === "public";
+    for (const quote of venues) {
+      let action = "—";
+      if (pairs.includes(symbol)) {
+        action = node("button", "", "da-rowbtn");
+        action.type = "button";
+        bilingual(action, "选择", "Select");
+        action.addEventListener("click", () => { choosePair(pairs.indexOf(symbol), quote.source); navigate("trade"); });
+      }
+      const timestamp = node("span", time(quote.as_of));
+      if (quote.timestamp_source === "collected") bilingual(timestamp, `${time(quote.as_of)} · 采集`, `${time(quote.as_of)} · collected`);
+      const venueLabel = node("span", venueName(quote.source));
+      if (publicMarket) {
+        const last = node("small");
+        const price = money(quote.price, quote.quote_currency);
+        if (quoteMode === "simulation") bilingual(last, `模拟最新价 ${price}`, `Last simulated price ${price}`);
+        else bilingual(last, `最新成交 ${price}`, `Last trade ${price}`);
+        venueLabel.append(document.createElement("br"), last);
+      }
+      const fee = quote.fee_rate === null ? "—" : `${(Number(quote.fee_rate) * 100).toPrecision(3)}%`;
+      let notional = money(ranking === "bid_ask_excluding_fees" ? quote.notional : quote.total, quote.quote_currency);
+      if (quote.quantity_covered === false) {
+        notional = node("span");
+        bilingual(notional, "卖一档数量不足", "Insufficient at best ask");
+      }
+      tableRow(marketBody, [venueLabel, money(quote.ask, quote.quote_currency), money(quote.bid, quote.quote_currency),
+        publicMarket ? money(quote.ask_size, symbol.split("/")[0]) : fee, timestamp, notional, action]);
+    }
+  }
+
+  function renderQuoteGroup(symbol, outcome) {
+    const row = node("tr", undefined, "da-quote-group");
+    const heading = node("th", symbol);
+    heading.colSpan = marketColumns.length;
+    const labels = outcome.status === "rejected" ? ["报价暂不可用", "Quotes unavailable"]
+      : !outcome.value.venues.length ? ["暂无有效报价", "No current quotes"]
+      : outcome.value.status !== "ok" ? ["当前可比报价不足两家", "Fewer than two current quotes"] : null;
+    if (labels) {
+      const status = node("span");
+      bilingual(status, ...labels);
+      heading.append(" · ", status);
+    }
+    row.append(heading);
+    marketBody.append(row);
+    if (outcome.status === "fulfilled") renderQuoteRows(outcome.value);
+  }
+
   async function loadMarket(selectedVenue = "", background = false) {
     const version = ++marketVersion;
-    const symbol = publicPair.value || pair;
+    const showAll = publicPair.value === allQuoteCurrencies;
+    const symbols = showAll ? spotAssets.get(publicAsset.value).map(({ symbol }) => symbol) : [publicPair.value || pair];
     const orderPair = pair;
-    const canTrade = pairs.includes(symbol);
-    text(one(".da-quote-panel h2"), symbol);
+    const compareTitle = one(".da-quote-panel h2");
+    if (showAll) bilingual(compareTitle, `${publicAsset.value} · 所有计价币`, `${publicAsset.value} · All quote currencies`);
+    else text(compareTitle, symbols[0]);
     text(one(".da-order h2"), pair);
     text(amount.closest("label").querySelector("b"), pair.split("/")[0]);
     if (!background) {
@@ -313,20 +377,32 @@
       bilingual(marketNotice, "正在读取中台报价…", "Loading middle-office quotes…");
     }
     try {
-      const comparison = venueQuotes(symbol);
-      const [result, orderQuotes] = await Promise.all([comparison, symbol === orderPair ? comparison : venueQuotes(orderPair)]);
+      const requests = new Map([...new Set([...symbols, orderPair])].map((symbol) => [symbol, venueQuotes(symbol)]));
+      const outcomes = await Promise.allSettled([...symbols, orderPair].map((symbol) => requests.get(symbol)));
       if (version !== marketVersion) return;
-      const publicMarket = result.market_mode === "public";
-      const preFee = result.ranking_basis === "bid_ask_excluding_fees";
+      const orderQuotes = outcomes.pop().value;
+      const results = outcomes.filter((outcome) => outcome.status === "fulfilled").map((outcome) => outcome.value);
+      if (!results.length && !showAll) throw outcomes[0].reason;
+      const result = results[0];
+      const publicMarket = showAll || result.market_mode === "public";
+      const simulatedFeed = publicMarket && result?.quote_mode === "simulation";
+      const preFee = showAll || result.ranking_basis === "bid_ask_excluding_fees";
       const compareCaption = one(".da-quote-panel .da-panelhead p");
       if (publicMarket) {
-        if (!marketTimer) {
+        const refreshMs = simulatedFeed ? 2000 : 10000;
+        if (marketRefreshMs !== refreshMs) {
+          clearInterval(marketTimer);
+          marketRefreshMs = refreshMs;
           marketTimer = setInterval(() => {
             if (!document.hidden) loadMarket(venue.value, true);
-          }, 10000);
+          }, refreshMs);
         }
         bilingual(marketColumns[3], "卖一挂单数量", "Best ask size");
-        if (canTrade) {
+        if (showAll) {
+          bilingual(compareCaption, "按计价币分组，只比较同一组内的报价。", "Quotes are grouped and compared only within each quote currency.");
+        } else if (simulatedFeed) {
+          bilingual(compareCaption, "组内模拟器生成的买卖报价，不是交易所实时行情。", "Simulated bid and ask from the team’s generator, not live exchange quotes.");
+        } else if (pairs.includes(result.symbol)) {
           bilingual(compareCaption, "比较 0.01 币的现货报价，优先列出卖一档可覆盖的平台。", "Compare quotes for 0.01 units and prioritize venues with enough at the best ask.");
         } else {
           bilingual(compareCaption, "按相同计价币比较 0.01 币的现货报价。该交易对仅供比价。", "Compare spot quotes for 0.01 units in one currency. This pair is available for comparison.");
@@ -337,44 +413,26 @@
       }
       if (preFee) bilingual(marketColumns[5], "报价金额（未计费）", "Notional (fees excluded)");
       else bilingual(marketColumns[5], "含费总额（0.01 币）", "Total with fee (0.01 units)");
-      if (!preview && !submitting) setVenues(orderQuotes.venues, background ? venue.value : selectedVenue);
+      if (!preview && !submitting) setVenues(orderQuotes?.venues ?? [], background ? venue.value : selectedVenue);
       marketBody.replaceChildren();
-      for (const quote of result.venues) {
-        let action = "—";
-        if (canTrade) {
-          action = node("button", "", "da-rowbtn");
-          action.type = "button";
-          bilingual(action, "选择", "Select");
-          action.addEventListener("click", () => { choosePair(pairs.indexOf(symbol), quote.source); navigate("trade"); });
-        }
-        const timestamp = node("span", time(quote.as_of));
-        if (quote.timestamp_source === "collected") bilingual(timestamp, `${time(quote.as_of)} · 采集`, `${time(quote.as_of)} · collected`);
-        const venueLabel = node("span", quote.source);
-        if (publicMarket) {
-          const last = node("small");
-          const price = money(quote.price, quote.quote_currency);
-          bilingual(last, `最新成交 ${price}`, `Last trade ${price}`);
-          venueLabel.append(document.createElement("br"), last);
-        }
-        const fee = quote.fee_rate === null ? "—" : `${(Number(quote.fee_rate) * 100).toPrecision(3)}%`;
-        let notional = money(preFee ? quote.notional : quote.total, quote.quote_currency);
-        if (quote.quantity_covered === false) {
-          notional = node("span");
-          bilingual(notional, "卖一档数量不足", "Insufficient at best ask");
-        }
-        tableRow(marketBody, [venueLabel, money(quote.ask, quote.quote_currency), money(quote.bid, quote.quote_currency),
-          publicMarket ? money(quote.ask_size, symbol.split("/")[0]) : fee, timestamp, notional, action]);
-      }
-      const latest = result.venues.map((quote) => quote.as_of).sort().at(-1);
+      if (showAll) symbols.forEach((symbol, index) => renderQuoteGroup(symbol, outcomes[index]));
+      else renderQuoteRows(result);
+      const latest = results.flatMap(({ venues }) => venues.map((quote) => quote.as_of)).sort().at(-1);
       text(one(".da-clock"), time(latest));
-      if (publicMarket) bilingual(one(".da-fresh"), `公开现货 · ${time(latest)}`, `Public spot · ${time(latest)}`);
+      if (!latest) text(one(".da-fresh"), "—");
+      else if (publicMarket && !simulatedFeed) bilingual(one(".da-fresh"), `公开现货 · ${time(latest)}`, `Public spot · ${time(latest)}`);
       else bilingual(one(".da-fresh"), `模拟 · ${time(latest)}`, `Simulation · ${time(latest)}`);
-      const best = orderQuotes.venues[0];
+      const best = orderQuotes?.venues[0];
       text(one(".da-quote-pill"), best ? money(best.price, best.quote_currency) : "—");
-      if (publicMarket) {
+      if (showAll) {
+        if (!latest) bilingual(marketNotice, "当前没有可用报价。", "No quotes are available.");
+        else if (simulatedFeed) bilingual(marketNotice, "模拟报价每 2 秒更新，未计交易费。", "Simulated quotes update every 2 seconds. Fees excluded.");
+        else bilingual(marketNotice, "报价未计交易费，订单仍为模拟。", "Fees excluded; simulated orders only.");
+      } else if (publicMarket) {
         const unavailable = [...result.excluded_sources, ...result.missing_sources];
         const details = unavailable.length ? ` · ${unavailable.join(", ")}` : "";
-        if (result.status === "ok") bilingual(marketNotice, `报价未计交易费，订单仍为模拟${details}`, `Fees excluded; simulated orders only${details}`);
+        if (simulatedFeed && result.status === "ok") bilingual(marketNotice, "模拟报价每 2 秒更新，未计交易费。", "Simulated quotes update every 2 seconds. Fees excluded.");
+        else if (result.status === "ok") bilingual(marketNotice, `报价未计交易费，订单仍为模拟${details}`, `Fees excluded; simulated orders only${details}`);
         else bilingual(marketNotice, `当前可比报价不足两家${details}`, `Fewer than two current quotes${details}`);
       } else if (result.status === "ok") bilingual(marketNotice, "模拟报价。按买卖价全量模拟成交。", "Simulated quotes. Full fills at bid or ask are assumed.");
       else bilingual(marketNotice, "有效报价不足两家。", "Fewer than two current venues are available.");

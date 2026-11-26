@@ -1,4 +1,4 @@
-"""Collect public spot quotes without exchange-account credentials."""
+"""Collect public spot quotes and the team's simulated BTC and ETH quotes."""
 
 import json
 import logging
@@ -12,6 +12,7 @@ from urllib.parse import urlencode
 from urllib.request import Request, build_opener
 
 from .market import NoRedirect
+from .simulated_market import SIMULATED_SOURCES, SIMULATOR_INTERVAL, SIMULATOR_NAME, SimulatedMarket
 from .validation import BusinessError, amount, iso, number
 
 
@@ -33,12 +34,12 @@ USDT_PAIRS = tuple(f"{ticker}/USDT" for ticker in (
     "BTC ETH SOL XRP LINK AVAX ADA DOGE DOT LTC BCH UNI ATOM XLM SUI NEAR APT ETC HBAR TRX "
     "BNB SHIB PEPE FIL ARB OP ICP AAVE INJ POL SEI WLD RENDER ALGO GRT COMP ZEC STX USDC RLUSD USDS"
 ).split())
-KRAKEN_PAIRS = {"XBTUSDT": "BTC/USDT", **{
+KRAKEN_PAIRS = {
     f"{ticker}USDT": f"{ticker}/USDT" for ticker in
-    "ETH SOL XRP LINK AVAX ADA DOT LTC BCH ATOM BNB TON SHIB ALGO USDC DAI RLUSD".split()
-}}
+    "SOL XRP LINK AVAX ADA DOT LTC BCH ATOM BNB TON SHIB ALGO USDC DAI RLUSD".split()
+}
 HK_PAIRS = ("BTC/USD", "ETH/USD", "SOL/USD", "BTC/HKD", "ETH/HKD", "LINK/USD", "USDT/USD", "USDT/HKD")
-PROVIDER_MARKETS = {
+_EXCHANGE_MARKETS = {
     "Binance": (*USDT_PAIRS, "FDUSD/USDT", "TUSD/USDT"),
     "OKX": (*USDT_PAIRS, "TON/USDT", "PYUSD/USDT"),
     "Kraken": tuple(KRAKEN_PAIRS.values()),
@@ -47,6 +48,12 @@ PROVIDER_MARKETS = {
                 "APT/USD", "XRP/USD", "AVAX/USD", "DOGE/USD", "UNI/USD"),
     "OSL": (*HK_PAIRS, "SOL/HKD", "RLUSD/HKD", "USDGO/USD", "USDGO/USDT"),
 }
+EXCHANGE_MARKETS = {
+    source: tuple(symbol for symbol in symbols if not symbol.startswith(("BTC/", "ETH/")))
+    for source, symbols in _EXCHANGE_MARKETS.items()
+}
+PROVIDER_MARKETS = {**EXCHANGE_MARKETS, **SIMULATED_SOURCES}
+FEED_MARKETS = {**EXCHANGE_MARKETS, SIMULATOR_NAME: frozenset().union(*SIMULATED_SOURCES.values())}
 BINANCE_PAIRS = {symbol.replace("/", ""): symbol for symbol in PROVIDER_MARKETS["Binance"]}
 OKX_PAIRS = {symbol.replace("/", "-"): symbol for symbol in PROVIDER_MARKETS["OKX"]}
 HASHKEY_PAIRS = {symbol.replace("/", ""): symbol for symbol in PROVIDER_MARKETS["HashKey"]}
@@ -193,15 +200,20 @@ class PublicMarketFeed:
         self.fetch = fetch
         self.stop_event = Event()
         self.lock = Lock()
-        self.status = {name: {"state": "starting"} for name in PROVIDER_MARKETS}
-        self.threads = [Thread(target=self._run, args=(name,), daemon=True) for name in PROVIDER_MARKETS]
+        self.simulator = SimulatedMarket()
+        self.status = {name: {"state": "starting"} for name in FEED_MARKETS}
+        self.threads = [Thread(target=self._run, args=(name,), daemon=True) for name in FEED_MARKETS]
 
     def snapshot(self):
         with self.lock:
             return self.status.copy()
 
     def poll(self, name):
-        if name == "HashKey":
+        if name == SIMULATOR_NAME:
+            now = self.office.clock()
+            quotes = [_quote(symbol, source, price, bid, ask, 1, 1, now, "collected")
+                      for symbol, source, price, bid, ask in self.simulator.step()]
+        elif name == "HashKey":
             quotes = _hashkey(self.fetch)
         elif name == "OSL":
             quotes = _osl(self.stop_event)
@@ -223,7 +235,7 @@ class PublicMarketFeed:
         while not self.stop_event.is_set():
             try:
                 pairs = self.poll(name)
-                result = {"state": "ok" if len(pairs) == len(PROVIDER_MARKETS[name]) else "partial", "pairs": pairs}
+                result = {"state": "ok" if len(pairs) == len(FEED_MARKETS[name]) else "partial", "pairs": pairs}
                 failures = 0
             except ModuleNotFoundError:
                 LOG.warning("OSL public feed requires the optional requirements-live.txt dependency")
@@ -237,7 +249,8 @@ class PublicMarketFeed:
                 failures += 1
             with self.lock:
                 self.status[name] = {**result, "checked_at": iso(datetime.now(timezone.utc))}
-            delay = min(120, self.interval * 2 ** min(failures, 4))
+            interval = SIMULATOR_INTERVAL if name == SIMULATOR_NAME else self.interval
+            delay = min(120, interval * 2 ** min(failures, 4))
             self.stop_event.wait(delay)
 
     def start(self):

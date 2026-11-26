@@ -13,6 +13,7 @@ from urllib.request import HTTPCookieProcessor, Request, build_opener, urlopen
 
 from run_demo import ASSESSMENT, demo_stack
 from middle_office.public_market import HK_PAIRS, USDT_PAIRS
+from middle_office.simulated_market import SIMULATED_SOURCES
 
 
 USER = "student_demo"
@@ -400,7 +401,7 @@ def offline_checks():
         print("PASS logout, account switching, isolated balances, profiles, orders, previews and AI context")
 
 
-def live_comparison(ui, symbol, deadline, *, required_sources=(), minimum=2):
+def live_comparison(ui, symbol, deadline, *, required_sources=(), minimum=2, quote_mode="public"):
     query = urlencode({"symbol": symbol, "quantity": "0.01", "side": "buy"})
     while True:
         report = checked(ui, "GET", "/api/market/venues?" + query)
@@ -411,11 +412,37 @@ def live_comparison(ui, symbol, deadline, *, required_sources=(), minimum=2):
             raise AssertionError(f"Incomplete live quotes for {symbol}: {report}")
         sleep(0.6)
     assert report["market_mode"] == "public" and report["ranking_basis"] == "bid_ask_excluding_fees"
+    assert report["quote_mode"] == quote_mode
     for quote in report["venues"]:
         assert quote["quote_currency"] == symbol.split("/")[1] and quote["fee_rate"] is None
         assert quote["total"] is None and Decimal(quote["ask"]) >= Decimal(quote["bid"]) > 0 and quote["as_of"]
     assert not (set(report["missing_sources"]) & set(required_sources))
-    print(f"PASS public {symbol}: " + ", ".join(sorted(sources)))
+    print(f"PASS {quote_mode} {symbol}: " + ", ".join(sorted(sources)))
+    return report
+
+
+def check_simulated_market(ui, catalog, deadline):
+    supported = {symbol for pairs in SIMULATED_SOURCES.values() for symbol in pairs}
+    assert {symbol for symbol in catalog if symbol.startswith(("BTC/", "ETH/"))} == supported
+    for symbol in sorted(supported):
+        expected = {source for source, pairs in SIMULATED_SOURCES.items() if symbol in pairs}
+        assert set(catalog[symbol]) == expected
+        report = live_comparison(ui, symbol, deadline, required_sources=expected, minimum=len(expected),
+                                 quote_mode="simulation")
+        assert {row["source"] for row in report["venues"]} == expected
+        assert all(row["bid_size"] == row["ask_size"] == "1" for row in report["venues"])
+
+    for symbol in ("BTC/USDT", "ETH/USDT"):
+        preview = checked(ui, "POST", "/api/orders/preview", {
+            "symbol": symbol, "side": "buy", "quantity": "0.01", "order_type": "market",
+        })
+        assert preview["source"] in SIMULATED_SOURCES and preview["mode"] == "simulation"
+        chat = checked(ui, "POST", "/api/assistant/chat", {
+            "message": f"比较 {symbol} 的报价", "market_queries": [symbol],
+        })
+        assert "多来源买卖报价" in chat["reply"] and "模拟报价" in chat["reply"]
+        assert {row["source"] for row in chat["market"][0]["venues"] if row["freshness"] == "fresh"} == set(SIMULATED_SOURCES)
+    print("PASS BTC and ETH order previews and AI use the same simulated quotes")
 
 
 def live_checks():
@@ -426,27 +453,30 @@ def live_checks():
         questionnaire_form(ui, middle, ai)
         catalog = checked(ui, "GET", "/api/market/catalog")
         assert catalog["market_mode"] == "public"
-        assert {"HashKey", "OSL"} == set(catalog["pairs"]["BTC/USD"])
+        assert {"HashKey", "OSL"} <= set(catalog["pairs"]["SOL/USD"])
         assert {"Binance", "OKX", "Kraken"} <= set(catalog["pairs"]["USDC/USDT"])
-        assert {symbol for symbol in USDT_PAIRS + HK_PAIRS} <= catalog["pairs"].keys()
+        exchange_pairs = [symbol for symbol in USDT_PAIRS + HK_PAIRS if not symbol.startswith(("BTC/", "ETH/"))]
+        assert set(exchange_pairs) <= catalog["pairs"].keys()
         deadline = monotonic() + 22
-        for symbol in USDT_PAIRS:
-            live_comparison(ui, symbol, deadline)
+        check_simulated_market(ui, catalog["pairs"], deadline)
         hk_sources = {"HashKey", "OSL"} if find_spec("websockets") else {"HashKey"}
         if "OSL" not in hk_sources:
             print("SKIP OSL comparison (install requirements-live.txt)")
-        for symbol in HK_PAIRS:
+        for symbol in (symbol for symbol in HK_PAIRS if symbol in exchange_pairs):
             live_comparison(ui, symbol, deadline, required_sources=hk_sources, minimum=len(hk_sources))
 
-        chat = checked(ui, "POST", "/api/assistant/chat", {"message": "比较 BTC/USDT 的报价", "market_queries": ["BTC/USDT"]})
-        assert len([row for row in chat["market"][0]["venues"] if row["freshness"] == "fresh"]) >= 2
+        chat = checked(ui, "POST", "/api/assistant/chat", {"message": "比较 SOL/USDT 的报价", "market_queries": ["SOL/USDT"]})
+        venues = {row["source"] for row in chat["market"][0]["venues"] if row["freshness"] == "fresh"}
+        assert len(venues) >= 2 and not venues.intersection(SIMULATED_SOURCES)
         assert "多来源买卖报价" in chat["reply"]
-        print("PASS live venue quotes reach the assistant through middle office")
+        print("PASS public Solana quotes reach the assistant through middle office")
         if "OSL" in hk_sources:
-            hk_chat = checked(ui, "POST", "/api/assistant/chat", {"message": "比较 BTC/HKD 的报价", "market_queries": ["BTC/HKD"]})
+            hk_chat = checked(ui, "POST", "/api/assistant/chat", {"message": "比较 SOL/USD 的报价", "market_queries": ["SOL/USD"]})
             venues = {row["source"] for row in hk_chat["market"][0]["venues"] if row["freshness"] == "fresh"}
             assert venues == hk_sources
-            print("PASS the assistant reads both Hong Kong venues in HKD")
+            print("PASS the assistant reads both Hong Kong venues for SOL/USD")
+        for symbol in (symbol for symbol in USDT_PAIRS if symbol in exchange_pairs):
+            live_comparison(ui, symbol, deadline)
         new_asset = checked(ui, "POST", "/api/assistant/chat", {"message": "比较 XRP/USDT 的报价", "market_queries": ["XRP/USDT"]})
         assert {"Binance", "OKX"} <= {row["source"] for row in new_asset["market"][0]["venues"] if row["freshness"] == "fresh"}
         print("PASS expanded catalog and XRP quotes reach the assistant")

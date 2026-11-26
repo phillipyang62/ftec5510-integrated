@@ -164,7 +164,11 @@ class MiddleOffice:
         return -15 <= age <= self.max_quote_age
 
     def _visible_quote(self, quote):
-        return not self.public_sources or (quote["source"] in self.public_sources and "timestamp_source" in quote)
+        source, symbol = quote["source"], quote["symbol"]
+        return not self.public_sources or (
+            source in self.public_sources and "timestamp_source" in quote
+            and symbol in self.public_source_pairs.get(source, (symbol,))
+        )
 
     def _quote(self, state, symbol, venue=None, *, at=None):
         candidates = [q for q in state["quotes"].values() if q["symbol"] == symbol and self._visible_quote(q)
@@ -275,8 +279,10 @@ class MiddleOffice:
             expected = {source for source in self.public_sources
                         if symbol in self.public_source_pairs.get(source, (symbol,))}
             missing = expected - {q["source"] for q in venues} - set(excluded)
+            simulated = not self.public_sources or any(source.startswith("demo:") for source in expected)
             return {"symbol": symbol, "side": side, "quantity": amount(qty), "mode": "simulation",
                     "market_mode": "public" if self.public_sources else "simulation",
+                    "quote_mode": "simulation" if simulated else "public",
                     "venues": venues, "excluded_sources": sorted(excluded), "missing_sources": sorted(missing),
                     "status": "ok" if len(venues) >= 2 else "insufficient_sources",
                     "recommended_source": eligible[0]["source"] if len(eligible) >= 2 else None,
