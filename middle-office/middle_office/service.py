@@ -6,6 +6,7 @@ import json
 import re
 import uuid
 
+from .price_history import PriceHistory
 from .store import Store
 from .validation import BusinessError, amount, asset, identifier, iso, number, pair, require, text, timestamp
 
@@ -18,6 +19,7 @@ class MiddleOffice:
     def __init__(self, db_path, *, clock=None, max_quote_age=120, product_risks=None, public_sources=(),
                  suitability_advisory=False, public_source_pairs=None):
         self.store = Store(db_path)
+        self.price_history = PriceHistory()
         self.clock = clock or (lambda: datetime.now(timezone.utc))
         require(type(max_quote_age) is int and max_quote_age > 0, "invalid_config", "max_quote_age must be positive")
         self.max_quote_age = max_quote_age
@@ -208,22 +210,26 @@ class MiddleOffice:
                 require(origin in ("exchange", "collected"), "invalid_timestamp_source", "invalid quote timestamp basis")
                 quote["timestamp_source"] = origin
             clean.append(quote)
+        accepted = []
         with self.store.transaction(write=True) as state:
-            accepted = 0
             for quote in clean:
                 key = quote["symbol"] + "@" + quote["source"]
                 previous = state["quotes"].get(key)
                 if previous and previous["as_of"] >= quote["as_of"]:
                     continue
                 state["quotes"][key] = quote
-                accepted += 1
+                accepted.append(quote)
             # Event-driven full-fill simulation also works after restarting the service.
             for order in list(state["orders"].values()):
                 if order["status"] == "open":
                     self._try_fill(state, order)
             for user in state["accounts"]:
                 self._monitor(state, user)
-            return {"accepted": accepted, "ignored": len(clean) - accepted}
+        self.price_history.record((quote for quote in accepted if self._visible_quote(quote)), self.clock())
+        return {"accepted": len(accepted), "ignored": len(clean) - len(accepted)}
+
+    def price_chart(self, symbol, minutes="5"):
+        return self.price_history.chart(symbol, minutes, self.clock(), self.max_quote_age)
 
     def quotes(self, query="", limit=20, *, all_sources=False):
         require(type(limit) is int and 1 <= limit <= 50, "invalid_limit", "limit must be 1-50")

@@ -40,6 +40,7 @@ python -X utf8 check_integration.py --live-market
 
 ## 已接通的 API
 
+- 模拟下单价格图支持回看 1、5、10、15 分钟，默认 5 分钟。中台每 10 秒聚合一根报价 K 线，页面每 10 秒刷新图表。图表只显示中台启动后收到的报价，服务重启后重新积累。
 - 浏览器 → 中台：`GET /api/market/venues?symbol=BTC%2FUSDT&quantity=0.01&side=buy` 展示币种、计价币、价格、报价来源及时间。`GET /api/account/summary` 读取同一份中台账户快照，含余额、持仓和挂单。
 - 问卷结果 → 中台 → AI：`GET /api/questionnaire` 返回题库，`POST /api/questionnaire` 提交 `questionnaire_version`、`answers` 和 `consent`，按题库评分并同步。外部已评分系统仍可用 `PUT /api/profile` 导入派生结果。`GET /api/profile` 返回 AI 画像。AI 暂时不可用时，下次读画像或聊天会重新同步中台已保存的结果。
 - 浏览器 → AI → 中台：`POST /api/assistant/chat` 支持多来源买卖报价、持仓与挂单。`GET /api/risk` 输出 AI 风险统计。公开模式可在聊天里输入「比较 BTC/USDT 的报价」。

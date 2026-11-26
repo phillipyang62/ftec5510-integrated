@@ -69,7 +69,8 @@ def check_html(url):
 
 def check_sign_in(ui):
     assert checked(ui, "GET", "/api/session") == {"account_name": None}
-    for path in ("/api/account/summary", "/api/profile", "/api/orders", "/api/model-settings"):
+    for path in ("/api/account/summary", "/api/profile", "/api/orders", "/api/model-settings",
+                 "/api/market/history?symbol=BTC%2FUSDT"):
         assert checked(ui, "GET", path, expected=401)["error"]["code"] == "sign_in_required"
     assert checked(ui, "POST", "/api/session", {"account_name": "../no"}, expected=400)["error"]["code"] == "invalid_account_name"
     assert checked(ui, "POST", "/api/session", {"account_name": f" {USER} "}) == {"account_name": USER}
@@ -368,6 +369,15 @@ def offline_checks():
         assert all(row["quote_currency"] == "USDT" and row["price"] and row["as_of"] for row in venue_report["venues"])
         print("PASS frontend receives both venues with currency, price, and timestamp")
 
+        history_path = "/api/market/history?symbol=BTC%2FUSDT"
+        for minutes in (1, 5, 10, 15):
+            chart = checked(ui, "GET", f"{history_path}&minutes={minutes}")
+            assert chart["minutes"] == minutes and chart["interval_seconds"] == 10
+            assert chart["simulated"] and chart["source"] == "demo:HashKey"
+            assert chart["candles"][-1]["close"] == "68000"
+        assert checked(ui, "GET", history_path + "&minutes=4", expected=400)["error"]["code"] == "invalid_chart_range"
+        print("PASS signed-in order chart reads four quote windows from middle office")
+
         order_id = trade(ui)
         print("PASS read-only preview, insufficient funds, simulated fill, duplicate submit, pending order")
 
@@ -433,6 +443,8 @@ def check_simulated_market(ui, catalog, deadline):
         assert all(row["bid_size"] == row["ask_size"] == "1" for row in report["venues"])
 
     for symbol in ("BTC/USDT", "ETH/USDT"):
+        chart = checked(ui, "GET", "/api/market/history?" + urlencode({"symbol": symbol, "minutes": 1}))
+        assert chart["source"] == "demo:MDGateway:HashKey" and chart["simulated"] and chart["candles"]
         preview = checked(ui, "POST", "/api/orders/preview", {
             "symbol": symbol, "side": "buy", "quantity": "0.01", "order_type": "market",
         })
@@ -442,7 +454,7 @@ def check_simulated_market(ui, catalog, deadline):
         })
         assert "多来源买卖报价" in chat["reply"] and "模拟报价" in chat["reply"]
         assert {row["source"] for row in chat["market"][0]["venues"] if row["freshness"] == "fresh"} == set(SIMULATED_SOURCES)
-    print("PASS BTC and ETH order previews and AI use the same simulated quotes")
+    print("PASS BTC and ETH charts, order previews and AI use the simulated market")
 
 
 def live_checks():

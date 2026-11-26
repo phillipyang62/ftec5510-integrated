@@ -190,6 +190,17 @@
   const chartPair = one("#trade-chart-pair");
   const chartPrice = one("#trade-chart-price");
   const chartSource = one("#trade-chart-source");
+  const chartChange = one("#trade-chart-change");
+  const tradeScreen = one("#screen-trade");
+  const chartButtons = all("[data-chart-range]");
+  const chartGrid = one(".da-market-chart .da-market-grid");
+  const chartCandles = one(".da-market-chart .da-candle-grid");
+  const chartLabels = one(".da-market-chart .da-market-labels");
+  const chartStats = ["open", "high", "low", "count"].map((field) => one(`#trade-chart-${field}`));
+  const chartIntervalMs = 10000;
+  let chartMinutes = "5";
+  let chartVersion = 0;
+  let chartLoading = false;
   const orderbookPrice = one("#orderbook-price");
   const marketGroups = one("#market-groups");
   bilingual(marketColumns[1], "买入价（Ask）", "Ask");
@@ -314,6 +325,126 @@
     const query = new URLSearchParams({ symbol, quantity: "0.01", side: "buy" });
     return request(`/api/market/venues?${query}`);
   }
+
+  function svgNode(tag, attributes, label) {
+    const element = document.createElementNS("http://www.w3.org/2000/svg", tag);
+    for (const [name, value] of Object.entries(attributes)) element.setAttribute(name, value);
+    if (label !== undefined) text(element, label);
+    return element;
+  }
+
+  function clearPriceChart() {
+    chartGrid.replaceChildren();
+    chartCandles.replaceChildren();
+    chartLabels.replaceChildren();
+    for (const element of [chartPrice, chartChange, ...chartStats]) text(element, "—");
+    chartChange.classList.remove("da-positive", "da-negative");
+  }
+
+  function renderPriceChart(result) {
+    clearPriceChart();
+    const { candles, start, end, quote_currency: currency, simulated, source, status, as_of: asOf } = result;
+    if (!candles.length) {
+      bilingual(chartSource, "正在积累报价，暂无走势", "Collecting quotes; no history yet");
+      return;
+    }
+    const sourceLabel = source.replace(/^demo:(?:MDGateway:)?/, "");
+    const quotesZh = simulated ? "模拟报价" : "公开报价";
+    const quotesEn = simulated ? "Simulated quotes" : "Public quotes";
+    bilingual(chartSource, `${quotesZh} · ${sourceLabel} · ${time(asOf)}${status === "stale" ? " · 报价已过期" : ""}`,
+      `${quotesEn} · ${sourceLabel} · ${time(asOf)}${status === "stale" ? " · Stale quotes" : ""}`);
+    const opening = Number(candles[0].open);
+    const latest = candles.at(-1).close;
+    const high = Math.max(...candles.map(({ high }) => Number(high)));
+    const low = Math.min(...candles.map(({ low }) => Number(low)));
+    const change = (Number(latest) / opening - 1) * 100;
+    text(chartPrice, money(latest, currency));
+    text(chartChange, `${change > 0 ? "+" : ""}${change.toFixed(3)}%`);
+    chartChange.classList.toggle("da-positive", change > 0);
+    chartChange.classList.toggle("da-negative", change < 0);
+    [money(candles[0].open, currency), money(high, currency), money(low, currency), candles.length]
+      .forEach((value, index) => text(chartStats[index], value));
+
+    const windowStart = Date.parse(start);
+    const windowSize = Date.parse(end) - windowStart;
+    const interval = result.interval_seconds * 1000;
+    const left = 12, right = 670, top = 14, bottom = 268;
+    const padding = Math.max((high - low) * 0.12, 0.01);
+    const upper = high + padding, lower = low - padding;
+    const priceY = (price) => top + (upper - Number(price)) / (upper - lower) * (bottom - top);
+    const candleWidth = Math.min(16, (right - left) * interval / windowSize * 0.65);
+    const priceFormat = new Intl.NumberFormat(document.documentElement.lang, {
+      minimumFractionDigits: 2, maximumFractionDigits: high < 10 ? 4 : 2,
+    });
+    for (const fraction of [0, 0.25, 0.5, 0.75, 1]) {
+      const level = upper - (upper - lower) * fraction;
+      const height = priceY(level);
+      chartGrid.append(svgNode("line", { x1: left, y1: height, x2: right, y2: height }));
+      chartLabels.append(svgNode("text", { x: right + 8, y: height + 3 }, priceFormat.format(level)));
+    }
+    for (const fraction of [0, 1 / 3, 2 / 3, 1]) {
+      const x = left + (right - left) * fraction;
+      const label = new Date(windowStart + windowSize * fraction).toISOString().slice(11, 19);
+      chartLabels.append(svgNode("text", { x, y: 289, "text-anchor": fraction === 0 ? "start" : fraction === 1 ? "end" : "middle" }, label));
+    }
+    for (const candle of candles) {
+      const x = left + (Date.parse(candle.start) - windowStart + interval / 2) / windowSize * (right - left);
+      const openY = priceY(candle.open), closeY = priceY(candle.close);
+      const group = svgNode("g", { class: Number(candle.close) >= Number(candle.open) ? "is-up" : "is-down" });
+      group.append(
+        svgNode("title", {}, `${time(candle.start)} · O ${candle.open} / H ${candle.high} / L ${candle.low} / C ${candle.close} ${currency}`),
+        svgNode("line", { x1: x, y1: priceY(candle.high), x2: x, y2: priceY(candle.low) }),
+        svgNode("rect", { x: x - candleWidth / 2, y: Math.min(openY, closeY), width: candleWidth,
+          height: Math.max(1, Math.abs(openY - closeY)), rx: 1 }),
+      );
+      chartCandles.append(group);
+    }
+  }
+
+  async function loadPriceChart(reset = false) {
+    if (tradeScreen.hidden || (chartLoading && !reset)) return;
+    const version = ++chartVersion;
+    chartLoading = true;
+    text(chartPair, pair);
+    if (reset) {
+      clearPriceChart();
+      bilingual(chartSource, "正在读取中台报价…", "Loading middle-office quotes…");
+    }
+    try {
+      const query = new URLSearchParams({ symbol: pair, minutes: chartMinutes });
+      const result = await request(`/api/market/history?${query}`);
+      if (version === chartVersion) renderPriceChart(result);
+    } catch {
+      if (version === chartVersion) {
+        clearPriceChart();
+        bilingual(chartSource, "报价走势读取失败", "Price history unavailable");
+      }
+    } finally {
+      if (version === chartVersion) chartLoading = false;
+    }
+  }
+
+  const chartStatLabels = [["区间开盘", "Window open"], ["区间最高", "Window high"],
+    ["区间最低", "Window low"], ["K 线数", "Candles"]];
+  all(".da-chart-stats small").forEach((label, index) => bilingual(label, ...chartStatLabels[index]));
+  bilingual(one("#trade-chart-caption"), "每 10 秒更新 · 时间为 UTC", "Updates every 10 sec · UTC");
+  bilingual(one("#trade-chart-disclaimer"), "报价走势，不代表实际成交", "Quote history, not actual trades");
+  bilingual(one("#trade-chart-svg-title"), "下单价格走势图", "Order price chart");
+  chartButtons.forEach((button) => {
+    const minutes = button.dataset.chartRange;
+    bilingual(button, `${minutes} 分钟`, `${minutes} min`);
+    button.addEventListener("click", () => {
+      chartMinutes = minutes;
+      chartButtons.forEach((peer) => {
+        peer.classList.toggle("is-selected", peer === button);
+        peer.setAttribute("aria-pressed", String(peer === button));
+      });
+      loadPriceChart(true);
+    });
+  });
+  one('[data-screen-target="trade"]').addEventListener("click", () => loadPriceChart(true));
+  setInterval(() => { if (!document.hidden) loadPriceChart(); }, chartIntervalMs);
+  document.addEventListener("visibilitychange", () => { if (!document.hidden) loadPriceChart(); });
 
   const FX_PER_USD = Object.freeze({ USD: 1, USDT: 1, HKD: 7.8 });
   const ASSET_GROUPS = Object.freeze([
@@ -546,7 +677,6 @@
     const orderPair = pair;
     const canTrade = pairs.includes(symbol);
     text(one(".da-order h2"), pair);
-    text(chartPair, pair);
     text(amount.closest("label").querySelector("b"), pair.split("/")[0]);
     if (!background) {
       text(one(".da-clock"), "—");
@@ -610,9 +740,7 @@
       else bilingual(one(".da-fresh"), `模拟 · ${time(latest)}`, `Simulation · ${time(latest)}`);
       const best = orderQuotes.venues[0];
       text(one(".da-quote-pill"), best ? money(best.price, best.quote_currency) : "—");
-      text(chartPrice, best ? money(best.price, best.quote_currency) : "—");
       text(orderbookPrice, best ? money(best.price, best.quote_currency) : "—");
-      bilingual(chartSource, best ? `${best.source} · 示例走势` : "暂无报价", best ? `${best.source} · Sample chart` : "No quote available");
       if (publicMarket) {
         const unavailable = [...result.excluded_sources, ...result.missing_sources];
         const details = unavailable.length ? ` · ${unavailable.join(", ")}` : "";
@@ -624,9 +752,7 @@
       if (version === marketVersion) {
         marketBody.replaceChildren();
         text(one(".da-quote-pill"), "—");
-        text(chartPrice, "—");
         text(orderbookPrice, "—");
-        bilingual(chartSource, "报价读取失败", "Quote unavailable");
         text(one(".da-clock"), "—");
         text(one(".da-fresh"), "—");
         text(marketNotice, errorMessage(error));
@@ -635,7 +761,9 @@
   }
 
   function choosePair(index, selectedVenue = "") {
-    pair = pairs[index];
+    const nextPair = pairs[index];
+    const pairChanged = nextPair !== pair;
+    pair = nextPair;
     for (const group of [assets, watch]) {
       group.forEach((button, position) => {
         button.classList.toggle("is-selected", position === index);
@@ -646,6 +774,7 @@
     text(one(".da-quote-pill"), "—");
     setVenues([], selectedVenue);
     loadMarket(selectedVenue);
+    if (pairChanged) loadPriceChart(true);
   }
 
   pairs.forEach((_, index) => {
@@ -657,9 +786,6 @@
     loadMarket(venue.value);
   });
   publicPair.addEventListener("change", () => loadMarket(venue.value));
-  all("[data-chart-range]").forEach((button) => button.addEventListener("click", () => {
-    all("[data-chart-range]").forEach((peer) => peer.classList.toggle("is-selected", peer === button));
-  }));
   one("#screen-compare .da-headactions .da-secondary").addEventListener("click", () => {
     invalidateOrder();
     loadMarket(venue.value);

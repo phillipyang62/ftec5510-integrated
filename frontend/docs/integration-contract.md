@@ -167,6 +167,8 @@ GET /api/market/venues?symbol=BTC%2FUSDT&quantity=0.5&side=buy
 
 如果未来 AI 后端要支持多平台报价，内部行情键必须从单一 `symbol` 扩展为 `(venue, symbol)`；否则同一交易对来自不同平台时会互相覆盖。
 
+模拟下单页每 10 秒读取 `GET /api/market/history?symbol=BTC%2FUSDT&minutes=5`。接口需登录，支持 BTC/USDT、ETH/USDT、SOL/USDT，回看范围为 1、5、10、15 分钟。每个报价来源独立按 UTC 的 10 秒时段聚合 `price`，返回 `candles`，每条含 `start`、`open`、`high`、`low`、`close`。响应同时包含区间 `start` 和 `end`（右端点不含）、`source`、`simulated`、最新报价时间 `as_of` 和状态 `live`、`stale` 或 `empty`。图表为每个交易对显示单一来源。混合行情下，BTC 和 ETH 优先使用 HashKey 模拟源，SOL 优先使用 Binance 公开源。缺少新鲜首选报价时切换到同一交易对的可用来源。历史自中台启动后积累，缺报价的时段留空。
+
 ## 4. 订单边界
 
 ### 订单预览

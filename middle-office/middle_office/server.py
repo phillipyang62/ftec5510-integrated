@@ -95,6 +95,8 @@ class Handler(BaseHTTPRequestHandler):
             return 200, office.comparison(params.get("symbol", [None])[0], params.get("quantity", ["1"])[0], params.get("side", ["buy"])[0])
         if (method, path) == ("GET", "/api/market/catalog"):
             return 200, office.market_catalog()
+        if (method, path) == ("GET", "/api/market/history"):
+            return 200, office.price_chart(params.get("symbol", [None])[0], params.get("minutes", ["5"])[0])
         match = re.fullmatch(r"/api/accounts/([A-Za-z0-9_-]{1,64})(?:/(.*))?", path)
         if match:
             user, action = match.groups()

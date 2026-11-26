@@ -276,6 +276,8 @@ class Gateway:
             return self.middle.request(method, "/api/comparison" + query)
         if path == "/api/market/catalog" and method == "GET":
             return self.middle.request(method, path)
+        if path == "/api/market/history" and method == "GET":
+            return self.middle.request(method, path + query_string(params, "symbol", "minutes"))
         if path == "/api/account/summary" and method == "GET":
             return self.middle.request(method, self.account_path + "/analysis_snapshot")
         if path == "/api/account/transactions" and method == "GET":
