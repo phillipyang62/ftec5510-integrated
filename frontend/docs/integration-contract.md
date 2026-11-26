@@ -52,7 +52,13 @@ PUT /v1/profiles/{user_id}
 
 ### 对应投教
 
-`GET /api/education` 由 BFF 按登录会话转发到 AI 的 `GET /v1/education/{user_id}`。返回中英文 `title`、`content`，以及可选的 `focus`（维度名称和分数）。有杠杆提示时优先展示杠杆风险，待复核时展示测评复核，基础投教展示订单类型，其他情况取当前画像最低分维度。接口按规则选课，不调用生成模型，未完成问卷时返回 `404 assessment_required`。
+`GET /api/education` 由 BFF 按登录会话转发到 AI 的 `GET /v1/education/{user_id}`。返回中英文 `title`、`content`、可选的 `focus`（维度名称和分数）以及 `asset_examples`。有杠杆提示时优先展示杠杆风险，待复核时展示测评复核，基础投教展示订单类型和稳定币学习示例，其他情况取当前画像最低分维度。接口按规则选课，未完成问卷时返回 `404 assessment_required`。
+
+### 币种目录与适配
+
+- `GET /api/trading/products` 转发到 AI 的 `GET /v1/products`，返回 `policy`、`level_thresholds` 和 `products`。每个产品提供 `symbol`、`name`、`group`、`grade`、五维 `requirement_levels` 和对应的最低分 `requirements`、双语 `tags` 和 `basis`，以及 `sources`。当前 `classroom-v2` 的 0–4 级对应 0、30、45、60、85 分。
+- `GET /api/trading/suitability` 同步当前测评后转发到 `GET /v1/suitability/{user_id}`。响应包含 `level_thresholds`、`route`、`risk_level`、`product_cap`、候选交易对数组 `recommendations` 和学习交易对数组 `learning`。每项产品附 `status`（`learn`、`suitable`、`caution`）、双语 `reasons` 和未达标维度 `unmet`。稳定币学习示例可阅读，低 OC 的模拟练习提醒通过 `unmet` 与 `reasons` 展示。
+- 资产匹配对话通过确定性规则返回 `asset_guidance`，与适配接口使用同一结构。模拟下单继续通过中台预览和确认。若档位合规但单项分数偏低，预览可返回 `suitability_warning.code=profile_dimensions` 和 `unmet_dimensions`。
 
 ### AI 对话
 
@@ -99,7 +105,9 @@ simulation
 trace_id
 ```
 
-生成模型成功时还返回 `model_name`。前端按 `generation` 显示实际用到的模型或内置回复。
+生成模型成功时还返回 `model_name`。普通对话返回 `model_status`，包含 `state`、`code`、平台、模型、是否可重试和中英文提示。调用失败时前端显示具体错误，`reply` 仍可包含已核实的行情和账户数据。测评与资产匹配由规则生成。
+
+聊天中询问个人持仓或传入 `include_account: true` 会读取中台分析快照中的持仓列表。`account.positions` 返回完整交易对和数量，`holdings_comparison` 另给每项产品的档位、是否超出上限及未达标的维度分数和门槛。未收录的交易对的产品档位为 `null`。持仓风险分析在本机处理。
 
 ### 模型设置
 
@@ -124,7 +132,7 @@ GET /v1/risk/{user_id}?quote_currency=USDT
 
 ## 3. 行情边界
 
-`GET /api/market/catalog` 由 BFF 转发给中台，返回 `market_mode` 和 `pairs`。`pairs` 的键是交易对，值是已配置的报价来源数组。前端使用目录生成币种和计价币选项。报价及可用状态以 `GET /api/market/venues` 中返回的具体交易对为准；其中 `quote_mode` 区分模拟报价（`simulation`）与公开交易所报价（`public`），不改变整套服务的 `market_mode`。BTC/ETH 模拟来源以 `demo:MDGateway:` 开头，提交订单预览时应使用完整来源标识。SOL 和其他币种不变，离线演示继续使用原有模拟报价。
+`GET /api/market/catalog` 由 BFF 转发给中台，返回 `market_mode` 和 `pairs`。`pairs` 的键是交易对，值是其报价来源数组。公开模式列出已配置来源，离线模式列出模拟报价来源。前端使用目录生成币种和计价币选项，具体报价及可用状态来自 `GET /api/market/venues`。公开模式下 BTC/ETH 的模拟来源以 `demo:MDGateway:` 开头，提交订单预览时应使用完整来源标识。`quote_mode` 区分模拟报价（`simulation`）与公开现货报价（`public`）。
 
 AI 后端的 `/v1/market/quotes` 是单交易对参考价：
 
@@ -167,7 +175,7 @@ GET /api/market/venues?symbol=BTC%2FUSDT&quantity=0.5&side=buy
 
 如果未来 AI 后端要支持多平台报价，内部行情键必须从单一 `symbol` 扩展为 `(venue, symbol)`；否则同一交易对来自不同平台时会互相覆盖。
 
-模拟下单页每 10 秒读取 `GET /api/market/history?symbol=BTC%2FUSDT&minutes=5`。接口需登录，支持 BTC/USDT、ETH/USDT、SOL/USDT，回看范围为 1、5、10、15 分钟。每个报价来源独立按 UTC 的 10 秒时段聚合 `price`，返回 `candles`，每条含 `start`、`open`、`high`、`low`、`close`。响应同时包含区间 `start` 和 `end`（右端点不含）、`source`、`simulated`、最新报价时间 `as_of` 和状态 `live`、`stale` 或 `empty`。图表为每个交易对显示单一来源。混合行情下，BTC 和 ETH 优先使用 HashKey 模拟源，SOL 优先使用 Binance 公开源。缺少新鲜首选报价时切换到同一交易对的可用来源。历史自中台启动后积累，缺报价的时段留空。
+模拟下单页每 10 秒读取 `GET /api/market/history?symbol=BTC%2FUSDT&minutes=5`。接口需登录，一键联调时支持币种目录中的 13 个 USDT 交易对，回看范围为 1、5、10、15 分钟。每个报价来源独立按 UTC 的 10 秒时段聚合 `price`，返回 `candles`，每条含 `start`、`open`、`high`、`low`、`close`。响应同时包含区间 `start` 和 `end`（右端点不含）、`source`、`simulated`、最新报价时间 `as_of` 和状态 `live`、`stale` 或 `empty`。图表为每个交易对显示单一来源。混合行情下，BTC 和 ETH 优先使用 HashKey 模拟源，其余币种使用公开报价。缺少新鲜首选报价时切换到同一交易对的可用来源。历史自中台启动后积累，缺报价的时段留空。
 
 ## 4. 订单边界
 
@@ -233,6 +241,7 @@ AI 后端当前没有订单预览、创建、撤销或成交接口；这些能�
 
 ```text
 GET    /api/account/summary
+POST   /api/account/deposits
 GET    /api/account/performance?period=3M
 GET    /api/account/transactions?limit=20
 GET    /api/watchlist
@@ -241,6 +250,8 @@ DELETE /api/watchlist/{symbol}
 ```
 
 账户金额必须包含币种和时间戳。空账户与接口不可用必须是不同状态。
+
+`POST /api/account/deposits` 接收 `{"amount":"125.50","request_id":"deposit-example-1"}`。BFF 取当前会话的账户标识，转发到中台 `POST /api/accounts/{user}/deposits`。金额使用正十进制字符串，最多八位小数。中台将金额加入模拟 USDT 余额，返回 `deposit_id`、`currency`、`amount`、`total`、`available` 和 `mode`。同一账户重试相同请求编号和金额时返回原回执，请求编号相同但金额变更时返回 `409 request_conflict`。
 
 `GET /api/account/transactions?offset=0&limit=20&sort=newest` 返回中台的 `trades` 和 `total`，用于账户页的交易历史。`sort=newest` 按成交入账倒序分页，省略时沿用中台入账顺序。初始持仓、订单预览和未成交挂单均不会生成成交记录。
 

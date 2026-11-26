@@ -7,6 +7,7 @@ from urllib.parse import parse_qs, unquote, urlsplit
 
 from .assistant import ChatValidationError
 from .models import model_options, session_model
+from .product_matching import LEVEL_THRESHOLDS, POLICY, catalog_products
 from .profiles import ProfileValidationError
 
 
@@ -117,6 +118,12 @@ class ApiHandler(BaseHTTPRequestHandler):
             raise ApiError(401, "unauthorized", "valid service bearer token required")
 
         assistant = self.server.assistant
+        if (method, path) == ("GET", "/v1/products"):
+            return 200, {"products": catalog_products(), "policy": POLICY,
+                         "level_thresholds": dict(LEVEL_THRESHOLDS)}
+        if path.startswith("/v1/suitability/") and method == "GET":
+            user_id = require_user_id(unquote(path.removeprefix("/v1/suitability/")))
+            return 200, assistant.suitability(user_id)
         if path == "/v1/model-settings" and method in {"GET", "PUT"}:
             if method == "GET":
                 return 200, model_options(assistant.model, assistant.remote_model)

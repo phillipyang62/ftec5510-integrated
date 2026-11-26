@@ -47,10 +47,11 @@
     body[data-integrated] .da-chat-layout { grid-template-columns: minmax(0, 1fr); }
     body[data-integrated] .da-bubble { white-space: pre-wrap; overflow-wrap: anywhere; }
     body[data-integrated] .da-integration-notice { padding: 12px 16px; margin: 0; }
+    body[data-integrated] .da-integration-notice:empty { display: none; }
     body:not([data-integrated]) .da-sign-in,
     body:not([data-integrated]) .da-session-controls,
     body[data-account-name] .da-sign-in,
-    body[data-integrated]:not([data-account-name]) :is(.da-shell, .da-session-controls, .da-status, .da-clock) {
+    body[data-integrated]:not([data-account-name]) :is(.da-shell, .da-session-controls) {
       display: none;
     }
     .da-sign-in {
@@ -80,7 +81,7 @@
     }
     #account-login-submit { min-height: 44px; margin-top: 8px; }
     #account-login-submit:disabled, #account-switch:disabled { opacity: .65; }
-    #account-login-hint, .da-sign-in-card .da-login-note { color: var(--da-muted); font-size: 12px; }
+    #account-login-status:empty { display: none; }
     #account-login-status:not(:empty), #account-switch-status:not(:empty) { color: var(--da-negative); }
     .da-session-controls { display: flex; align-items: center; gap: 8px; min-width: 0; }
     .da-session-controls > strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 24ch; }
@@ -135,8 +136,6 @@
       </div>
     </div>
     <div class="da-topmeta">
-      <span class="da-status"><i data-lucide="shield-check" aria-hidden="true"></i> KYC 已完成 · 专业投资者</span>
-      <span class="da-clock">行情更新 14:32:08 HKT</span>
       <div class="da-session-controls">
         <strong id="current-account"></strong>
         <button class="da-secondary" id="account-switch" type="button">切换账户</button>
@@ -154,19 +153,14 @@
 
   <main class="da-sign-in" aria-labelledby="account-login-title">
     <article class="da-panel da-sign-in-card">
-      <p class="da-eyebrow" id="account-login-eyebrow">本机演示</p>
-      <h1 id="account-login-title">登录演示账户</h1>
-      <p id="account-login-description">输入账户名继续。首次使用该名称时会自动创建模拟账户。</p>
+      <h1 id="account-login-title">登录账户</h1>
       <form id="account-login-form" method="post" action="/api/session">
         <label for="account-name">账户名</label>
         <input id="account-name" name="account_name" type="text" autocomplete="username" autocapitalize="none"
-          spellcheck="false" maxlength="64" required placeholder="student_demo"
-          aria-describedby="account-login-hint account-login-status">
-        <small id="account-login-hint">测试账户 demo_c1 至 demo_c5 对应五个风险等级。</small>
+          spellcheck="false" maxlength="64" required aria-describedby="account-login-status">
         <button class="da-primary" id="account-login-submit" type="submit">登录</button>
         <p id="account-login-status" role="status"></p>
       </form>
-      <p class="da-login-note">仅用于模拟，不验证身份。请勿输入真实账号或密码。</p>
     </article>
   </main>
 
@@ -216,9 +210,7 @@
       <section class="da-screen" id="screen-compare" aria-labelledby="compare-title">
         <div class="da-pagehead">
           <div>
-            <p class="da-eyebrow">MARKET OVERVIEW</p>
             <h1 id="compare-title">比价大屏</h1>
-            <p>聚合持牌交易所报价，比较可执行价格、费用与预估滑点。</p>
           </div>
           <div class="da-headactions">
             <button class="da-secondary" type="button"><i data-lucide="refresh-cw" aria-hidden="true"></i> 刷新</button>
@@ -246,7 +238,6 @@
             <select id="public-pair"></select>
           </label>
           <div class="da-fx-assumptions" aria-label="汇率假设">
-            <span><b>NBBO</b> 资产组内最优买卖价</span>
             <span><b>USDT/USD</b> 1.00</span>
             <span><b>USD/HKD</b> 7.80</span>
           </div>
@@ -281,11 +272,10 @@
             <div class="da-panelhead">
               <div>
                 <h2>资产组 NBBO 盘口</h2>
-                <p>按资产组汇总每一家交易所的 USD、USDT 与 HKD 合约盘口</p>
               </div>
               <span class="da-nbbo-legend">
-                <i class="is-ask"></i>最佳 Ask
-                <i class="is-bid"></i>最佳 Bid
+                <i class="is-ask" aria-hidden="true"></i><span>最优买入</span>
+                <i class="is-bid" aria-hidden="true"></i><span>最优卖出</span>
               </span>
             </div>
             <div class="da-market-groups" id="market-groups" aria-live="polite">
@@ -415,9 +405,7 @@
       <section class="da-screen" id="screen-trade" aria-labelledby="trade-title" hidden>
         <div class="da-pagehead">
           <div>
-            <p class="da-eyebrow">WATCHLIST & ORDER</p>
             <h1 id="trade-title">自选操作</h1>
-            <p>从关注列表进入报价比较，并在同一页面完成下单前检查。</p>
           </div>
           <div class="da-headactions">
             <button class="da-secondary" type="button"><i data-lucide="plus" aria-hidden="true"></i> 添加自选</button>
@@ -428,43 +416,13 @@
         <div class="da-trade-layout">
           <article class="da-panel da-watchlist">
             <div class="da-panelhead">
-              <div>
-                <h2>我的自选</h2>
-                <p>4 项资产 · 价格自动刷新</p>
-              </div>
-              <button class="da-iconbtn da-iconbtn-light" type="button" aria-label="搜索自选资产"><i data-lucide="search" aria-hidden="true"></i></button>
+              <h2>模拟下单币种</h2>
             </div>
-            <div class="da-watchlist-head" aria-hidden="true">
-              <span>资产</span><span>最新价</span><span>24H</span><span>状态</span>
-            </div>
-            <button class="da-watchrow is-selected" type="button" aria-pressed="true">
-              <span class="da-asset"><b class="da-coin da-coin-btc">₿</b><span><strong>Bitcoin</strong><small>BTC / USDT</small></span></span>
-              <span class="da-number">68,420.10<small>US$</small></span>
-              <span class="da-positive">+2.84%</span>
-              <span class="da-state-dot">可交易</span>
-            </button>
-            <button class="da-watchrow" type="button">
-              <span class="da-asset"><b class="da-coin da-coin-eth">Ξ</b><span><strong>Ethereum</strong><small>ETH / USDT</small></span></span>
-              <span class="da-number">3,512.42<small>US$</small></span>
-              <span class="da-positive">+1.37%</span>
-              <span class="da-state-dot">可交易</span>
-            </button>
-            <button class="da-watchrow" type="button">
-              <span class="da-asset"><b class="da-coin da-coin-sol">S</b><span><strong>Solana</strong><small>SOL / USDT</small></span></span>
-              <span class="da-number">182.36<small>US$</small></span>
-              <span class="da-negative">-0.62%</span>
-              <span class="da-state-dot">可交易</span>
-            </button>
-            <button class="da-watchrow" type="button">
-              <span class="da-asset"><b class="da-coin da-coin-cash">$</b><span><strong>USDC 活期理财</strong><small>稳定币 · 无价格波动</small></span></span>
-              <span class="da-number">4.25%<small>年化</small></span>
-              <span class="da-positive">+0.01%</span>
-              <span class="da-state-dot">可申购</span>
-            </button>
-            <div class="da-watchfoot">
-              <span><i data-lucide="star" aria-hidden="true"></i> 点击星标可移除自选</span>
-              <button class="da-textbtn" type="button">管理分组</button>
-            </div>
+            <div id="trade-products" class="da-trade-products"></div>
+            <details class="da-product-requirements" id="trade-product-requirements" hidden>
+              <summary id="trade-requirements-title">五维门槛</summary>
+              <dl id="trade-requirements-list"></dl>
+            </details>
           </article>
 
           <article class="da-panel da-trade-chart" aria-labelledby="trade-chart-title">
@@ -500,43 +458,6 @@
             </div>
             <div class="da-chart-footer">
               <span id="trade-chart-caption">每 10 秒更新 · 时间为 UTC</span>
-              <small id="trade-chart-disclaimer">报价走势，不代表实际成交</small>
-            </div>
-          </article>
-
-          <article class="da-panel da-orderbook" aria-labelledby="orderbook-title">
-            <div class="da-panelhead">
-              <div>
-                <h2 id="orderbook-title">订单簿</h2>
-                <p>示例盘口 · 0.01 BTC</p>
-              </div>
-              <button class="da-iconbtn da-iconbtn-light" type="button" aria-label="切换订单簿显示"><i data-lucide="list-filter" aria-hidden="true"></i></button>
-            </div>
-            <div class="da-orderbook-head" aria-hidden="true">
-              <span>价格（USDT）</span><span>数量（BTC）</span>
-            </div>
-            <div class="da-orderbook-side is-ask">
-              <div style="--depth: 86%"><span>68,468.80</span><strong>0.1842</strong></div>
-              <div style="--depth: 63%"><span>68,465.20</span><strong>0.0926</strong></div>
-              <div style="--depth: 72%"><span>68,462.90</span><strong>0.1348</strong></div>
-              <div style="--depth: 41%"><span>68,459.40</span><strong>0.0515</strong></div>
-              <div style="--depth: 55%"><span>68,455.10</span><strong>0.0834</strong></div>
-            </div>
-            <div class="da-orderbook-mid">
-              <strong id="orderbook-price">68,420.10</strong>
-              <span>≈ US$ 68,420.10</span>
-            </div>
-            <div class="da-orderbook-side is-bid">
-              <div style="--depth: 58%"><span>68,419.80</span><strong>0.0751</strong></div>
-              <div style="--depth: 78%"><span>68,416.30</span><strong>0.1287</strong></div>
-              <div style="--depth: 46%"><span>68,412.60</span><strong>0.0642</strong></div>
-              <div style="--depth: 90%"><span>68,408.40</span><strong>0.2016</strong></div>
-              <div style="--depth: 36%"><span>68,404.90</span><strong>0.0433</strong></div>
-            </div>
-            <div class="da-orderbook-footer">
-              <span><i class="is-ask"></i>卖盘</span>
-              <span><i class="is-bid"></i>买盘</span>
-              <small>仅作界面示意</small>
             </div>
           </article>
 
@@ -619,25 +540,20 @@
 
             <p class="da-order-risk" id="order-risk-notice" role="status" hidden></p>
             <button class="da-primary da-submit" id="submit-order" type="button">确认买入 BTC</button>
-            <p class="da-order-note">提交后将跳转至订单确认页，需再次核对可成交价格与费用。</p>
           </article>
         </div>
       </section>
 
       <section class="da-screen" id="screen-assistant" aria-labelledby="assistant-title" hidden>
         <div class="da-pagehead">
-          <div>
-            <p class="da-eyebrow">INVESTOR EDUCATION</p>
-            <h1 id="assistant-title">聊天助手</h1>
-            <p>基于知识库与实时市场数据回答投资者教育问题，并提供可追溯来源。</p>
-          </div>
-          <span class="da-edu-badge"><i data-lucide="graduation-cap" aria-hidden="true"></i> 教育用途 · 不构成投资建议</span>
+          <h1 id="assistant-title">聊天助手</h1>
         </div>
 
         <section class="da-panel da-learning" id="guided-lesson" aria-labelledby="lesson-title" hidden>
           <h2 id="lesson-title" tabindex="-1">投教</h2>
           <p class="da-learning-focus" id="lesson-focus" hidden></p>
           <p id="lesson-content" role="status"></p>
+          <ul id="lesson-assets" class="da-lesson-assets" hidden></ul>
           <div class="da-learning-actions">
             <button class="da-primary" type="button" id="lesson-trade" hidden>打开模拟下单页</button>
             <button class="da-secondary" type="button" id="lesson-retry" hidden>重试加载投教</button>
@@ -688,36 +604,11 @@
 
             <div class="da-messages" aria-live="polite"></div>
 
-            <div class="da-chat-starters" aria-label="推荐问题">
-              <p>试试这样问</p>
-              <div>
-                <button type="button" data-assistant-prompt
-                  data-prompt-zh="比较 BTC / USDT 的跨平台报价"
-                  data-prompt-en="Compare the BTC / USDT quotes across venues">
-                  <i data-lucide="line-chart" aria-hidden="true"></i>
-                  <span>比较 BTC / USDT 的跨平台报价<small>查看价差、费用与推荐平台</small></span>
-                </button>
-                <button type="button" data-assistant-prompt
-                  data-prompt-zh="解释我的风险等级和产品上限"
-                  data-prompt-en="Explain my risk level and product cap">
-                  <i data-lucide="shield-check" aria-hidden="true"></i>
-                  <span>解释我的风险等级和产品上限<small>结合当前问卷结果说明</small></span>
-                </button>
-                <button type="button" data-assistant-prompt
-                  data-prompt-zh="我如何计算买入手续费和滑点？"
-                  data-prompt-en="How are trading fees and slippage calculated?">
-                  <i data-lucide="calculator" aria-hidden="true"></i>
-                  <span>我如何计算买入手续费和滑点？<small>了解交易成本的计算方法</small></span>
-                </button>
-              </div>
-            </div>
-
             <form class="da-composer" id="assistant-form">
               <label class="sr-only" for="assistant-input">向聊天助手提问</label>
               <textarea id="assistant-input" rows="2" placeholder="询问产品、费用、市场概念或监管规则…"></textarea>
               <button class="da-send" type="submit" aria-label="发送问题"><i data-lucide="send" aria-hidden="true"></i></button>
             </form>
-            <p class="da-chat-disclaimer">回答仅供投资者教育参考，可能基于你当前所在页面提供市场数据上下文，不构成任何要约、推荐或投资建议。</p>
           </article>
 
           <aside class="da-context-panel">
@@ -759,15 +650,25 @@
       <section class="da-screen" id="screen-account" aria-labelledby="account-title" hidden>
         <div class="da-pagehead">
           <div>
-            <p class="da-eyebrow">PORTFOLIO</p>
             <h1 id="account-title">账户统计</h1>
-            <p>按资产、交易所与交易记录查看账户表现和费用去向。</p>
           </div>
           <div class="da-headactions">
-            <button class="da-secondary" type="button"><i data-lucide="download" aria-hidden="true"></i> 导出报表</button>
-            <button class="da-primary" type="button"><i data-lucide="arrow-left-right" aria-hidden="true"></i> 资金划转</button>
+            <button class="da-primary" id="deposit-open" type="button" aria-haspopup="dialog">充值 USDT</button>
           </div>
         </div>
+        <p class="da-integration-notice" id="deposit-result" role="status" hidden></p>
+        <dialog id="deposit-dialog" aria-labelledby="deposit-title">
+          <form id="deposit-form">
+            <h2 id="deposit-title">模拟充值</h2>
+            <label for="deposit-amount">金额（USDT）</label>
+            <input id="deposit-amount" type="text" inputmode="decimal" maxlength="22" autocomplete="off" autofocus required>
+            <p id="deposit-status" role="status"></p>
+            <div class="da-model-actions">
+              <button class="da-rowbtn" id="deposit-cancel" type="button">取消</button>
+              <button class="da-primary" id="deposit-submit" type="submit">确认充值</button>
+            </div>
+          </form>
+        </dialog>
 
         <div class="da-kpis da-kpis-account">
           <article class="da-kpi">
@@ -1010,7 +911,6 @@
   .da-chathead,
   .da-msg-actions,
   .da-fresh,
-  .da-status,
   .da-chart-legend,
   .da-route-point {
     display: flex;
@@ -1053,17 +953,7 @@
     gap: 12px;
   }
 
-  .da-status {
-    gap: 6px;
-    padding: 6px 9px;
-    border-radius: 999px;
-    background: var(--da-brand-soft);
-    color: var(--da-brand-strong);
-    font-size: 11px;
-    font-weight: 600;
-  }
 
-  .da-status svg,
   .da-chip svg,
   .da-secondary svg,
   .da-primary svg,
@@ -1072,18 +962,12 @@
   .da-navitem svg,
   .da-watchfoot svg,
   .da-msg-actions svg,
-  .da-edu-badge svg,
   .da-context-card svg {
     width: 15px;
     height: 15px;
     flex: 0 0 auto;
   }
 
-  .da-clock {
-    color: var(--da-muted);
-    font-size: 11px;
-    font-variant-numeric: tabular-nums;
-  }
 
   .da-langtoggle {
     min-height: 34px;
@@ -2119,24 +2003,7 @@
     margin: 0 15px;
   }
 
-  .da-order-note {
-    margin: 7px 15px 0;
-    color: var(--da-muted);
-    font-size: 8px;
-    text-align: center;
-  }
 
-  .da-edu-badge {
-    padding: 8px 10px;
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    border-radius: 9px;
-    background: var(--da-brand-soft);
-    color: var(--da-brand-strong);
-    font-size: 10px;
-    font-weight: 600;
-  }
 
   .da-chat-layout {
     display: grid;
@@ -2176,7 +2043,7 @@
     margin-left: auto;
   }
 
-  #model-settings {
+  :is(#model-settings, #deposit-dialog) {
     width: min(400px, calc(100% - 32px));
     padding: 20px;
     border: 1px solid var(--da-line);
@@ -2186,11 +2053,11 @@
     font-size: 13px;
   }
 
-  #model-settings::backdrop { background: rgb(9 17 22 / .6); }
+  :is(#model-settings, #deposit-dialog)::backdrop { background: rgb(9 17 22 / .6); }
 
-  #model-settings-form, .da-model-fields { display: grid; gap: 8px; }
-  #model-settings label { margin-top: 4px; }
-  #model-settings :is(select, input[type="password"]) {
+  #model-settings-form, #deposit-form, .da-model-fields { display: grid; gap: 8px; }
+  :is(#model-settings, #deposit-dialog) label { margin-top: 4px; }
+  #model-settings :is(select, input[type="password"]), #deposit-amount {
     width: 100%;
     min-height: 36px;
     padding: 6px 8px;
@@ -2201,10 +2068,10 @@
     font: inherit;
   }
   .da-model-consent { display: flex; align-items: center; gap: 8px; }
-  #model-settings-status { color: var(--da-muted); }
-  #model-settings-status:empty { display: none; }
-  #model-settings .da-primary { padding-inline: 12px; }
-  #model-settings button:disabled { opacity: .55; cursor: default; }
+  :is(#model-settings-status, #deposit-status) { color: var(--da-muted); }
+  :is(#model-settings-status, #deposit-status):empty { display: none; }
+  :is(#model-settings, #deposit-dialog) .da-primary { padding-inline: 12px; }
+  :is(#model-settings, #deposit-dialog) button:disabled { opacity: .55; cursor: default; }
 
   .da-assistant-avatar {
     width: 31px;
@@ -2436,12 +2303,6 @@
     height: 14px;
   }
 
-  .da-chat-disclaimer {
-    padding: 8px 15px 13px;
-    color: var(--da-muted);
-    font-size: 8px;
-    text-align: center;
-  }
 
   .da-context-panel {
     display: grid;
@@ -2757,10 +2618,6 @@
   }
 
   @media (max-width: 880px) {
-    .da-topmeta .da-clock,
-    .da-status {
-      display: none;
-    }
 
     .da-shell {
       grid-template-columns: 1fr;
@@ -3008,19 +2865,7 @@
     gap: 13px;
   }
 
-  .da-status {
-    min-height: 34px;
-    padding: 0 12px;
-    border: 1px solid #ede8ff;
-    background: #f7f4ff;
-    color: #6727e4;
-    font-size: 11px;
-  }
 
-  .da-clock {
-    color: #70707b;
-    font-size: 11px;
-  }
 
   .da-langtoggle,
   .da-iconbtn {
@@ -3082,21 +2927,12 @@
     box-shadow: 0 28px 80px rgba(52, 33, 96, .13);
   }
 
-  .da-sign-in-card .da-eyebrow {
-    color: #6727e4;
-    font-size: 10px;
-    letter-spacing: .15em;
-  }
 
   .da-sign-in-card h1 {
     font-size: 30px;
     font-weight: 700;
   }
 
-  .da-sign-in-card > p:not(.da-eyebrow):not(.da-login-note) {
-    color: #70707b;
-    line-height: 1.7;
-  }
 
   .da-sign-in-card label {
     color: #3f3f46;
@@ -3774,10 +3610,10 @@
   }
 
   .da-trade-layout {
-    grid-template-columns: 300px minmax(430px, 1fr) 294px;
+    grid-template-columns: 300px minmax(0, 1fr);
     grid-template-areas:
-      "watch chart book"
-      "watch order order";
+      "watch chart"
+      "watch order";
     align-items: start;
     gap: 12px;
   }
@@ -3791,10 +3627,6 @@
     overflow: hidden;
   }
 
-  .da-orderbook {
-    grid-area: book;
-    overflow: hidden;
-  }
 
   .da-order {
     grid-area: order;
@@ -3831,6 +3663,51 @@
 
   .da-watchrow.is-selected {
     box-shadow: inset 2px 0 0 #9f6ffd;
+  }
+
+  .da-trade-products {
+    max-height: 330px;
+    overflow-y: auto;
+  }
+
+  .da-trade-products .da-watchrow {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .da-product-requirements {
+    padding: 12px;
+    border-top: 1px solid var(--da-line);
+    font-size: 12px;
+  }
+
+  .da-product-requirements summary {
+    cursor: pointer;
+    width: fit-content;
+  }
+
+  .da-product-requirements dl {
+    display: grid;
+    gap: 4px;
+    margin: 6px 0 0;
+  }
+
+  .da-product-requirements dl > div {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 6px;
+  }
+
+  .da-product-requirements dd {
+    margin: 0;
+    color: var(--da-muted);
+  }
+
+  .da-lesson-assets {
+    display: grid;
+    gap: 6px;
+    margin: 0;
+    padding-left: 20px;
+    color: var(--da-muted);
   }
 
   .da-watchfoot {
@@ -4012,121 +3889,23 @@
     gap: 5px;
   }
 
-  .da-chart-footer small {
-    margin-left: auto;
-    color: #9a9aa3;
-  }
 
-  .da-orderbook-head {
-    padding: 8px 13px;
-    display: flex;
-    justify-content: space-between;
-    background: #fafafa;
-    color: #8b8b94;
-    font-size: 8px;
-    font-weight: 650;
-  }
 
-  .da-orderbook-side {
-    display: grid;
-  }
 
-  .da-orderbook-side > div {
-    position: relative;
-    isolation: isolate;
-    padding: 4px 13px;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    min-height: 25px;
-    font-size: 9px;
-    font-variant-numeric: tabular-nums;
-  }
 
-  .da-orderbook-side > div::before {
-    content: "";
-    position: absolute;
-    z-index: -1;
-    top: 1px;
-    right: 0;
-    bottom: 1px;
-    width: var(--depth);
-    border-radius: 2px 0 0 2px;
-    background: color-mix(in srgb, var(--book-color) 11%, transparent);
-  }
 
-  .da-orderbook-side strong {
-    color: #70707b;
-    font-weight: 450;
-  }
 
-  .da-orderbook-side.is-ask {
-    --book-color: #f8495e;
-  }
 
-  .da-orderbook-side.is-ask > div > span {
-    color: #ec4358;
-  }
 
-  .da-orderbook-side.is-bid {
-    --book-color: #12b76a;
-  }
 
-  .da-orderbook-side.is-bid > div > span {
-    color: #0f9f5e;
-  }
 
-  .da-orderbook-mid {
-    min-height: 50px;
-    padding: 8px 13px;
-    display: flex;
-    align-items: baseline;
-    gap: 8px;
-    border-top: 1px solid #f0f0f3;
-    border-bottom: 1px solid #f0f0f3;
-  }
 
-  .da-orderbook-mid strong {
-    color: #12a967;
-    font-size: 18px;
-    font-weight: 750;
-    font-variant-numeric: tabular-nums;
-  }
 
-  .da-orderbook-mid span {
-    color: #8b8b94;
-    font-size: 8px;
-  }
 
-  .da-orderbook-footer {
-    padding: 10px 13px 13px;
-    display: flex;
-    align-items: center;
-    gap: 11px;
-    color: #70707b;
-    font-size: 8px;
-  }
 
-  .da-orderbook-footer i {
-    display: inline-block;
-    width: 6px;
-    height: 6px;
-    margin-right: 4px;
-    border-radius: 50%;
-  }
 
-  .da-orderbook-footer .is-ask {
-    background: #f8495e;
-  }
 
-  .da-orderbook-footer .is-bid {
-    background: #12b76a;
-  }
 
-  .da-orderbook-footer small {
-    margin-left: auto;
-    color: #9a9aa3;
-  }
 
   .da-order-side {
     margin: 14px 16px 12px;
@@ -4180,73 +3959,6 @@
     background: #0f9f5e;
   }
 
-  .da-order-note {
-    margin-right: 16px;
-    margin-left: 16px;
-  }
-
-  .da-chat-starters {
-    padding: 4px 16px 14px;
-  }
-
-  #screen-assistant:has(.da-messages:not(:empty)) .da-chat-starters {
-    display: none;
-  }
-
-  .da-chat-starters > p {
-    margin-bottom: 9px;
-    color: #70707b;
-    font-size: 10px;
-    font-weight: 650;
-  }
-
-  .da-chat-starters > div {
-    display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 9px;
-  }
-
-  .da-chat-starters button {
-    min-width: 0;
-    min-height: 76px;
-    padding: 12px;
-    display: flex;
-    align-items: flex-start;
-    gap: 9px;
-    border: 1px solid #e8ebff;
-    border-radius: 8px;
-    background: #fafafa;
-    color: #3f3f46;
-    text-align: left;
-  }
-
-  .da-chat-starters button:hover {
-    border-color: #c8b5f8;
-    background: #f7f3ff;
-    color: #6727e4;
-  }
-
-  .da-chat-starters button > svg {
-    width: 16px;
-    height: 16px;
-    margin-top: 1px;
-    flex: 0 0 auto;
-  }
-
-  .da-chat-starters button > span {
-    min-width: 0;
-    display: grid;
-    gap: 4px;
-    font-size: 11px;
-    font-weight: 650;
-    line-height: 1.35;
-  }
-
-  .da-chat-starters small {
-    color: #8b8b94;
-    font-size: 9px;
-    font-weight: 400;
-  }
 
   .da-composer,
   .da-context-card,
@@ -4274,14 +3986,9 @@
       grid-template-columns: 260px minmax(0, 1fr);
       grid-template-areas:
         "watch chart"
-        "watch book"
-        "order order";
+        "watch order";
     }
 
-    .da-topmeta .da-clock,
-    .da-topmeta .da-status {
-      display: none;
-    }
   }
 
   @media (max-width: 880px) {
@@ -4317,7 +4024,6 @@
       grid-template-areas:
         "watch"
         "chart"
-        "book"
         "order";
     }
 
@@ -4327,10 +4033,6 @@
 
     .da-kpis {
       grid-template-columns: repeat(2, minmax(0, 1fr));
-    }
-
-    .da-chat-starters > div {
-      grid-template-columns: minmax(0, 1fr);
     }
 
     .da-market-group-head {
@@ -4350,7 +4052,6 @@
 
   @media (max-width: 620px) {
     .da-brand > div:last-child > span,
-    .da-topmeta .da-langtoggle,
     .da-session-controls > strong {
       display: none;
     }
@@ -4410,23 +4111,22 @@
 
     const ZH_TO_EN = Object.freeze({
       "多平台数字资产投资台": "Multi-Platform Digital Asset Desk",
-      "KYC 已完成 · 专业投资者": "KYC Complete · Professional Investor",
-      "行情更新 14:32:08 HKT": "Updated 14:32:08 HKT",
       "工作台": "Workspace",
       "比价大屏": "Price Comparison",
       "自选操作": "Watchlist & Trade",
       "聊天助手": "AI Assistant",
-      "试试这样问": "Try asking",
-      "比较 BTC / USDT 的跨平台报价": "Compare BTC / USDT across venues",
-      "查看价差、费用与推荐平台": "Review spreads, fees and the recommended venue",
-      "解释我的风险等级和产品上限": "Explain my risk level and product cap",
-      "结合当前问卷结果说明": "Use my current assessment result",
-      "我如何计算买入手续费和滑点？": "How are trading fees and slippage calculated?",
-      "了解交易成本的计算方法": "Learn how trading costs are calculated",
+      "充值 USDT": "Top up USDT",
+      "模拟充值": "Simulated top-up",
+      "金额（USDT）": "Amount (USDT)",
+      "取消": "Cancel",
+      "确认充值": "Confirm top-up",
       "账户统计": "Account Analytics",
+      "登录账户": "Sign in",
+      "账户名": "Account name",
+      "登录": "Sign in",
+      "切换账户": "Switch account",
       "可用余额": "Available Balance",
       "查看账户": "View Account",
-      "聚合持牌交易所报价，比较可执行价格、费用与预估滑点。": "Aggregated quotes from licensed exchanges, comparing executable prices, fees and estimated slippage.",
       "刷新": "Refresh",
       "设置比较项": "Comparison Settings",
       "同资产多平台": "Multi-Venue",
@@ -4450,6 +4150,10 @@
       "总成本": "Total Cost",
       "操作": "Action",
       "最优": "Best",
+      "最优买入": "Best ask",
+      "最优卖出": "Best bid",
+      "正在生成资产组盘口…": "Loading order books…",
+      "等待中台报价": "Waiting for a quote",
       "选择": "Select",
       "总成本 = 买入价 × 数量 + 手续费 + 预估滑点影响；最终成交价以订单确认页为准。": "Total cost = buy price × quantity + fees + estimated slippage; final execution price is confirmed on the order review page.",
       "智能路由预览": "Smart Route Preview",
@@ -4478,7 +4182,6 @@
       "传统货币基金": "Money Market Fund",
       "港元货币市场基金 A": "HKD Money Market Fund A",
       "近 7 日年化": "7-day annualized",
-      "从关注列表进入报价比较，并在同一页面完成下单前检查。": "Move from your watchlist to quote comparison and complete pre-trade checks on one page.",
       "添加自选": "Add to Watchlist",
       "转入资金": "Transfer Funds",
       "我的自选": "My Watchlist",
@@ -4487,7 +4190,6 @@
       "最新价": "Last Price",
       "状态": "Status",
       "可交易": "Tradable",
-      "稳定币 · 无价格波动": "Stablecoin · Price-stable",
       "年化": "APY",
       "可申购": "Available",
       "点击星标可移除自选": "Use the star to remove an asset",
@@ -4508,9 +4210,6 @@
       "交易前检查通过": "Pre-Trade Checks Passed",
       "账户资格、余额与产品适当性均符合要求。": "Eligibility, balance and product suitability checks passed.",
       "确认买入 BTC": "Confirm BTC Buy",
-      "提交后将跳转至订单确认页，需再次核对可成交价格与费用。": "You will review the executable price and fees again before submitting the order.",
-      "基于知识库与实时市场数据回答投资者教育问题，并提供可追溯来源。": "Answers investor education questions from a knowledge base and live market data, with traceable sources.",
-      "教育用途 · 不构成投资建议": "Education Only · Not Investment Advice",
       "已连接市场数据与监管知识库": "Connected to market data and regulatory knowledge",
       "现在买 BTC，HashKey 和 OSL 哪个总成本更低？": "For buying BTC now, does HashKey or OSL have the lower total cost?",
       "按当前 0.5 BTC 的报价测算，": "Based on the current quote for 0.5 BTC, ",
@@ -4528,7 +4227,6 @@
       "稳定币理财与货币基金有什么区别？": "How does stablecoin yield differ from a money market fund?",
       "我的风险等级可以交易哪些产品？": "Which products can my risk profile access?",
       "向聊天助手提问": "Ask the AI assistant",
-      "回答仅供投资者教育参考，可能基于你当前所在页面提供市场数据上下文，不构成任何要约、推荐或投资建议。": "Answers are for investor education only and may use market-data context from your current page. They are not an offer, recommendation or investment advice.",
       "当前页面上下文": "Current Page Context",
       "页面": "Page",
       "自选操作 · BTC / USDT": "Watchlist & Trade · BTC / USDT",
@@ -4542,7 +4240,6 @@
       "监管资料 · 已更新": "Regulatory Material · Updated",
       "HashKey / OSL 实时报价": "HashKey / OSL Live Quotes",
       "市场数据 · 14:32:08": "Market Data · 14:32:08",
-      "按资产、交易所与交易记录查看账户表现和费用去向。": "Review account performance and fees by asset, venue and transaction.",
       "导出报表": "Export Report",
       "资金划转": "Transfer Funds",
       "总资产": "Total Assets",
@@ -4591,6 +4288,9 @@
       "推荐问题": "Suggested questions",
       "比较范围": "Comparison Scope",
       "资产筛选": "Asset Filters",
+      "汇率假设": "Conversion assumptions",
+      "图表周期": "Chart range",
+      "行情摘要": "Price summary",
       "BTC 两个交易所近 24 小时价差走势，当前为 0.071%": "24-hour BTC cross-venue spread trend, currently 0.071%",
       "搜索自选资产": "Search Watchlist Assets",
       "交易方向": "Trade Side",
@@ -4605,7 +4305,6 @@
       "资产配置：BTC 46%，ETH 21%，稳定币理财 18%，现金 15%": "Asset allocation: BTC 46%, ETH 21%, stablecoin yield 18%, cash 15%"
     });
 
-    const HAS_HAN = /[\u3400-\u9fff]/u;
     const textOriginals = new WeakMap();
     const attributeOriginals = new WeakMap();
     const languageToggle = root.querySelector("#language-toggle");
@@ -4665,7 +4364,7 @@
       const nodes = [];
       while (walker.nextNode()) {
         const parent = walker.currentNode.parentElement;
-        if (parent?.closest("script, style")) continue;
+        if (parent?.closest("script, style, [data-demo-zh]")) continue;
         nodes.push(walker.currentNode);
       }
       nodes.forEach(translateTextNode);
@@ -4676,7 +4375,7 @@
         if (label) label.textContent = currentLanguage === "en" ? "中文" : "EN";
         languageToggle.setAttribute(
           "aria-label",
-          currentLanguage === "en" ? "Switch to Chinese" : "Switch to English"
+          currentLanguage === "en" ? "Switch to Chinese" : "切换到英语"
         );
       }
     }

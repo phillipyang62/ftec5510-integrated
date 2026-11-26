@@ -1,5 +1,6 @@
 import json
 import os
+import ssl
 import unittest
 from unittest.mock import Mock, patch
 
@@ -9,6 +10,7 @@ from ai_mvp.models import (
     OpenAICompatibleModel,
     from_environment,
     remote_from_environment,
+    session_model,
 )
 
 
@@ -69,6 +71,82 @@ class OllamaModelTests(unittest.TestCase):
 
 
 class RemoteModelTests(unittest.TestCase):
+    def test_session_providers_use_their_genuine_https_hosts_and_protocols(self):
+        for provider, host, model_name in (
+            ("deepseek", "api.deepseek.com", "deepseek-flash"),
+            ("openai", "api.openai.com", "gpt-4.1-mini"),
+            ("gemini", "generativelanguage.googleapis.com", "gemini-3.1-flash-lite"),
+        ):
+            with self.subTest(provider=provider):
+                payload = ({"candidates": [{"content": {"parts": [{"text": "Vendor answer"}]}, "finishReason": "STOP"}]}
+                           if provider == "gemini" else {"choices": [{"message": {"content": "Vendor answer"}, "finish_reason": "stop"}]})
+                reply = connection_returning(payload)
+                with patch("ai_mvp.models.HTTPSConnection", return_value=reply) as connect:
+                    selected, model = session_model({"provider": provider, "api_key": "fake-key", "allow_billing": True})
+                    connect.assert_not_called()
+                    self.assertEqual(model.generate("system", "user"), "Vendor answer")
+                self.assertEqual((selected, model.provider, model.model), (provider, provider, model_name))
+                connect.assert_called_once_with(host, 443, timeout=30.0)
+                request = reply.request.call_args
+                body = json.loads(request.kwargs["body"])
+                if provider == "gemini":
+                    self.assertEqual(request.args, ("POST", "/v1beta/models/gemini-3.1-flash-lite:generateContent"))
+                    self.assertEqual(request.kwargs["headers"]["x-goog-api-key"], "fake-key")
+                    self.assertEqual(body["systemInstruction"]["parts"], [{"text": "system"}])
+                else:
+                    self.assertEqual(request.args, ("POST", "/v1/chat/completions"))
+                    self.assertEqual(request.kwargs["headers"]["Authorization"], "Bearer fake-key")
+                    self.assertEqual(body["model"], model_name)
+                    if provider == "openai":
+                        self.assertEqual(body["max_completion_tokens"], 320)
+                        self.assertIs(body["store"], False)
+                    else:
+                        self.assertEqual(body["thinking"], {"type": "disabled"})
+
+    def test_vendor_http_errors_keep_actionable_categories_without_upstream_bodies(self):
+        model = OpenAICompatibleModel("test-model", "https://provider.example", "fake-key")
+        for status, code in ((400, "request_rejected"), (401, "authentication_failed"), (402, "balance_exhausted"),
+                             (403, "permission_denied"), (404, "model_not_found"), (429, "rate_limited"),
+                             (503, "provider_unavailable")):
+            with self.subTest(status=status):
+                reply = connection_returning({"error": "private-upstream-body"}, status=status)
+                with patch("ai_mvp.models.HTTPSConnection", return_value=reply):
+                    with self.assertRaises(ModelUnavailable) as raised:
+                        model.generate("system", "user")
+                detail = raised.exception.as_dict()
+                self.assertEqual((detail["code"], detail["http_status"]), (code, status))
+                self.assertNotIn("private-upstream-body", json.dumps(detail))
+                self.assertNotIn("fake-key", json.dumps(detail))
+                reply.getresponse.return_value.read.assert_not_called()
+
+    def test_network_timeout_and_tls_failures_are_distinct(self):
+        model = OpenAICompatibleModel("test-model", "https://provider.example", "fake-key")
+        for error, code in ((OSError("private-network-details"), "network_error"),
+                            (TimeoutError("private-timeout"), "timeout"),
+                            (ssl.SSLCertVerificationError("private-certificate-details"), "tls_error")):
+            with self.subTest(code=code):
+                connection = Mock()
+                connection.request.side_effect = error
+                with patch("ai_mvp.models.HTTPSConnection", return_value=connection):
+                    with self.assertRaises(ModelUnavailable) as raised:
+                        model.generate("system", "user")
+                self.assertEqual(raised.exception.code, code)
+                self.assertNotIn("private-", json.dumps(raised.exception.as_dict()))
+
+    def test_gemini_invalid_key_http_400_exposes_only_the_whitelisted_reason(self):
+        _, model = session_model({"provider": "gemini", "api_key": "fake-key", "allow_billing": True})
+        reply = connection_returning({"error": {
+            "message": "private-vendor-body fake-key",
+            "details": [{"reason": "API_KEY_INVALID", "metadata": {"private": "private-metadata"}}],
+        }}, status=400)
+        with patch("ai_mvp.models.HTTPSConnection", return_value=reply):
+            with self.assertRaises(ModelUnavailable) as raised:
+                model.generate("system", "user")
+        detail = raised.exception.as_dict()
+        self.assertEqual((detail["code"], detail["http_status"]), ("authentication_failed", 400))
+        self.assertNotIn("private-", json.dumps(detail))
+        self.assertNotIn("fake-key", json.dumps(detail))
+
     def test_key_alone_cannot_enable_remote_requests(self):
         with patch.dict(os.environ, {"DEEPSEEK_API_KEY": "fake-deepseek-key"}, clear=True):
             self.assertIsNone(remote_from_environment())

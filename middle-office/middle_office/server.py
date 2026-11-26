@@ -67,9 +67,9 @@ class Handler(BaseHTTPRequestHandler):
         offered = self.headers.get("Authorization", "").encode()
         if self.server.token and hmac.compare_digest(offered, ("Bearer " + self.server.token).encode()):
             return
-        read_path = path == "/api/quotes" or re.fullmatch(r"/api/accounts/[A-Za-z0-9_-]{1,64}/(?:snapshot|analysis_snapshot)", path)
+        read_path = path in {"/api/quotes", "/api/market/trends"} or re.fullmatch(r"/api/accounts/[A-Za-z0-9_-]{1,64}/(?:snapshot|analysis_snapshot)", path)
         if self.server.read_token and hmac.compare_digest(offered, ("Bearer " + self.server.read_token).encode()):
-            require(self.command == "GET" and read_path, "read_only", "AI token only grants quotes and read-only account reports", 403)
+            require(self.command == "GET" and read_path, "read_only", "AI token only grants quotes, trends and read-only account reports", 403)
             return
         require(not self.server.token, "unauthorized", "valid service bearer token required", 401)
 
@@ -97,6 +97,8 @@ class Handler(BaseHTTPRequestHandler):
             return 200, office.market_catalog()
         if (method, path) == ("GET", "/api/market/history"):
             return 200, office.price_chart(params.get("symbol", [None])[0], params.get("minutes", ["5"])[0])
+        if (method, path) == ("GET", "/api/market/trends"):
+            return 200, office.market_trends()
         match = re.fullmatch(r"/api/accounts/([A-Za-z0-9_-]{1,64})(?:/(.*))?", path)
         if match:
             user, action = match.groups()
@@ -106,6 +108,9 @@ class Handler(BaseHTTPRequestHandler):
                 return 200, getattr(office, action)(user)
             if method == "PUT" and action in {"preferences", "assessment"}:
                 return 200, getattr(office, action)(user, self._body())
+            if (method, action) == ("POST", "deposits"):
+                require(bool(self.server.token), "unauthorized", "operator bearer token required for simulated top-ups", 401)
+                return 200, office.deposit(user, self._body())
             if (method, action) == ("POST", "orders/preview"):
                 return 200, office.preview_order(user, self._body())
             if action == "orders":

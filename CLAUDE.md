@@ -4,7 +4,7 @@
 
 - 前端使用 HTML、CSS、原生 JavaScript 与本地 Lucide 图标。用 Python 3.10+ 标准库提供同源 API。
 - 五维问卷由后端用版本化题库评分。发送给中台和 AI 的内容限于派生结果，原始选择仅用于本次评分。
-- 中台和 AI 使用 Python 3.10+、标准库 HTTP 服务及各自的 SQLite。AI 支持本地 Ollama 和显式启用的 DeepSeek。
+- 中台和 AI 使用 Python 3.10+、标准库 HTTP 服务及各自的 SQLite。AI 支持本地 Ollama 及会话内显式配置的 DeepSeek、OpenAI 和 Gemini。
 
 ## 目录与负责人
 
@@ -45,4 +45,4 @@
 ## 配置与密钥
 
 - `.env.example` 仅记录变量名。真实环境值、模型密钥、账号信息、SQLite 文件及运行日志不要提交。
-- 联调默认使用模拟数据和模板回复。只有明确指定 `--enable-deepseek` 才由演示启动器启用 API 模型。
+- 联调默认使用模拟数据。普通对话需要通过模型设置或启动参数显式配置模型。远程接入测试默认模拟提供商响应。

@@ -267,6 +267,24 @@
   const screen = find("#screen-questionnaire");
   const body = find("#questionnaire-body");
   const status = find("#questionnaire-status");
+  const errorMessages = {
+    invalid_answers: ["请检查作答后重新提交。", "Check your answers and submit again."],
+    invalid_question: ["题目编号有误，请刷新问卷后重试。", "Reload the questionnaire and try again."],
+    invalid_option: ["有选项无法识别，请检查作答。", "Check the selected answers and try again."],
+    incomplete: ["请完成所有题目后再提交。", "Answer all questions before submitting."],
+    invalid_quality: ["作答记录有误，请重新打开问卷。", "Reopen the questionnaire and try again."],
+    questionnaire_version_mismatch: ["问卷已更新，请刷新页面后重新填写。", "The questionnaire has changed. Reload the page and retake it."],
+    consent_required: ["请确认同意使用测评分数。", "Confirm your consent to use the assessment scores."],
+    invalid_context: ["补充信息有误，请检查后重试。", "Check the additional information and try again."],
+    provisional: ["本次作答需要复核，请重新完成测评。", "Review your answers and complete a new assessment."],
+    profile_sync_pending: ["测评已保存，助手正在同步，请稍后重试。", "Your assessment was saved. Retry shortly while the assistant synchronizes."],
+    profile_unavailable: ["暂时无法读取测评，请稍后重试。", "Your assessment is unavailable. Please try again shortly."],
+    upstream_unavailable: ["测评服务暂不可用，请稍后重试。", "The assessment service is unavailable. Please try again shortly."],
+    session_changed: ["演示账户已切换，请刷新页面。", "The demo account has changed. Reload the page."],
+    sign_in_required: ["请先登录演示账户。", "Sign in to a demo account first."],
+    local_only: ["请从演示页面打开问卷。", "Open the questionnaire from the demo page."],
+  };
+  let statusCopy = ["", ""];
   let bank;
   let result;
   let step = 0;
@@ -275,6 +293,22 @@
   let consent = false;
   let changes = 0;
   const answers = new Map();
+
+  function setStatus(zh = "", en = "") {
+    statusCopy = [zh, en];
+    status.textContent = label(zh, en);
+  }
+
+  function showError(error, zh, en) {
+    const detail = errorMessages[error.code] ?? ["请稍后重试。", "Please try again shortly."];
+    setStatus(`${zh} · ${detail[0]}`, `${en} · ${detail[1]}`);
+  }
+
+  function requestError(data) {
+    const error = new Error("Questionnaire request failed");
+    error.code = data?.error?.code;
+    return error;
+  }
 
   async function request(path, options = {}) {
     const response = await fetch(path, { ...options, headers: { ...options.headers, "X-Harbor-Account": accountName } });
@@ -285,15 +319,17 @@
   async function loadBank() {
     if (bank || loading) return;
     loading = true;
-    status.textContent = label("正在读取问卷…", "Loading questionnaire…");
+    setStatus("正在读取问卷…", "Loading questionnaire…");
     try {
       const response = await request("/api/questionnaire");
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      if (!response.ok) throw requestError(await response.json().catch(() => null));
       bank = await response.json();
       render();
     } catch (error) {
-      status.textContent = label(`问卷暂不可用 · ${error.message}`, `Questionnaire unavailable · ${error.message}`);
-      body.replaceChildren(button(label("重试", "Retry"), "da-secondary", loadBank));
+      showError(error, "问卷暂不可用", "Questionnaire unavailable");
+      const retry = button(label("重试", "Retry"), "da-secondary", loadBank);
+      retry.id = "questionnaire-retry";
+      body.replaceChildren(retry);
     } finally {
       loading = false;
     }
@@ -332,7 +368,7 @@
 
   function showResult() {
     const assessment = result.assessment;
-    status.textContent = "";
+    setStatus();
     const headline = document.createElement("h2");
     headline.textContent = label("测评结果", "Assessment result");
     const summary = document.createElement("dl");
@@ -381,7 +417,7 @@
     if (saving || !consent) return;
     saving = true;
     form.querySelectorAll("button, input").forEach((control) => { control.disabled = true; });
-    status.textContent = label("正在评分…", "Scoring…");
+    setStatus("正在评分…", "Scoring…");
     try {
       const response = await request("/api/questionnaire", {
         method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({
@@ -392,12 +428,12 @@
         }),
       });
       const data = await response.json();
-      if (!response.ok) throw new Error(data.error?.message || `HTTP ${response.status}`);
+      if (!response.ok) throw requestError(data);
       result = data;
       document.dispatchEvent(new Event("harbor-assessment-updated"));
       showResult();
     } catch (error) {
-      status.textContent = label(`提交失败 · ${error.message}`, `Submission failed · ${error.message}`);
+      showError(error, "提交失败", "Submission failed");
       form.querySelectorAll("button, input").forEach((control) => { control.disabled = false; });
     } finally {
       saving = false;
@@ -415,7 +451,7 @@
     const heading = document.createElement("h2");
     heading.textContent = `${step + 1}/${groups.length} · ${dimension(code)}`;
     form.append(heading, ...questions.map(questionField));
-    status.textContent = "";
+    setStatus();
     if (last) {
       const line = document.createElement("label");
       const check = document.createElement("input");
@@ -438,7 +474,7 @@
       event.preventDefault();
       const missing = questions.find(({ id }) => !answers.has(id));
       if (missing) {
-        status.textContent = label("请完成本组题目。", "Answer each question in this group.");
+        setStatus("请完成本组题目。", "Answer each question in this group.");
         form.elements.namedItem(missing.id)[0]?.focus();
       } else if (last) save(form);
       else { step++; render(); }
@@ -450,7 +486,11 @@
     const title = label("风险测评", "Risk assessment");
     nav.querySelector("span").textContent = title;
     find("#questionnaire-title").textContent = title;
+    const previousStatus = statusCopy;
     if (!screen.hidden) render();
+    setStatus(...previousStatus);
+    const retry = find("#questionnaire-retry");
+    if (retry) retry.textContent = label("重试", "Retry");
   }
 
   nav.hidden = false;

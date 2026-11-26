@@ -30,7 +30,17 @@
   };
   const money = (amount, currency) => amount == null ? "—" : `${amount} ${currency}`;
   const time = (timestamp) => timestamp ? timestamp.replace("T", " ").replace(/\.\d+Z$/, "Z") : "—";
-  const errorMessage = (error) => error.message || "Request failed";
+  const apiMessages = new Map(Object.entries({
+    insufficient_balance: ["可用余额不足。", "Insufficient available balance."],
+    insufficient_position: ["可用持仓不足。", "Insufficient available holdings."],
+    insufficient_top_size: ["报价数量不足，请减少委托数量。", "The quote cannot cover this quantity. Enter a smaller amount."],
+    quote_unavailable: ["当前暂无报价。", "No quote is available."],
+    invalid_number: ["请检查委托数量和价格。", "Check the order quantity and price."],
+    preview_expired: ["预览已过期，请重新预览。", "The preview expired. Preview the order again."],
+    too_many_previews: ["请稍候再预览。", "Wait a moment before previewing again."],
+    order_not_found: ["未找到这笔订单。", "Order not found."],
+  }));
+  const requestError = (error, zh, en) => apiMessages.get(error.code) ?? [zh, en];
   const accountName = document.body.dataset.accountName;
 
   async function request(path, method = "GET", payload) {
@@ -76,15 +86,7 @@
     const input = one("#account-name");
     const submit = one("#account-login-submit");
     const status = one("#account-login-status");
-    bilingual(one("#account-login-eyebrow"), "本机演示", "LOCAL DEMO");
-    bilingual(one("#account-login-title"), "登录演示账户", "Sign in to a demo account");
-    bilingual(one("#account-login-description"), "输入账户名继续。首次使用该名称时会自动创建模拟账户。",
-      "Enter an account name to continue. A new name creates a simulation account.");
     bilingual(one('label[for="account-name"]'), "账户名", "Account name");
-    bilingual(one("#account-login-hint"), "测试账户 demo_c1 至 demo_c5 对应五个风险等级。",
-      "Test accounts demo_c1 through demo_c5 cover the five risk levels.");
-    bilingual(one(".da-login-note"), "仅用于模拟，不验证身份。请勿输入真实账号或密码。",
-      "Simulation only. Identity is not verified. Do not enter real credentials.");
     bilingual(submit, "登录", "Sign in");
     input.addEventListener("input", () => {
       input.removeAttribute("aria-invalid");
@@ -112,7 +114,7 @@
           input.setAttribute("aria-invalid", "true");
           bilingual(status, "请输入有效的账户名。", "Enter a valid account name.");
         } else {
-          bilingual(status, "暂时无法打开演示账户，请重试。", "Could not open the demo account. Try again.");
+          bilingual(status, "登录失败，请重试。", "Could not sign in. Try again.");
         }
         submit.disabled = false;
         input.readOnly = false;
@@ -144,25 +146,31 @@
   hide("#screen-compare .da-kpis, .da-route-panel, .da-crossasset, " +
     ".da-segmented, .da-chips, .da-quote-pair, .da-quote-panel .da-textbtn, .da-quote-panel .da-footnote, " +
     "#screen-compare .da-headactions .da-primary, #screen-trade .da-headactions, .da-watchlist .da-iconbtn, " +
-    ".da-order-summary > div:nth-child(3), .da-context-panel, #screen-account .da-headactions, " +
-    ".da-account-grid, .da-screen .da-pagehead p, " +
-    ".da-order-note, .da-order .da-panelhead p, .da-precheck strong, .da-chat-disclaimer");
-  bilingual(one(".da-status"), "模拟账户", "Simulation account");
+    ".da-order-summary > div:nth-child(3), .da-context-panel, " +
+    ".da-account-grid, .da-order .da-panelhead p, .da-precheck strong");
   bilingual(one("#compare-title"), "资产组 NBBO 比价", "Asset-group NBBO");
   bilingual(one(".da-quote-panel h2"), "资产组 NBBO 盘口", "Asset-group NBBO books");
   bilingual(one("#trade-title"), "模拟下单", "Simulated order");
   bilingual(one('[data-screen-target="trade"] span'), "模拟下单", "Simulated order");
-  bilingual(one(".da-watchlist h2"), "自选行情", "Watchlist");
+  bilingual(one(".da-watchlist h2"), "模拟下单币种", "Simulated order assets");
   hide(".da-watchlist .da-panelhead p");
-  bilingual(one(".da-edu-badge"), "课堂投教", "Classroom education");
   one(".da-railsummary button").addEventListener("click", () => navigate("account"));
 
-  const pairs = ["BTC/USDT", "ETH/USDT", "SOL/USDT"];
+  const defaultPairs = ["BTC/USDT", "ETH/USDT", "SOL/USDT"];
   const assets = all('[data-choice-group="compare-asset"]');
-  const watch = all(".da-watchrow");
-  assets.slice(pairs.length).forEach((element) => { element.hidden = true; });
-  watch.slice(pairs.length).forEach((element) => { element.hidden = true; });
-  let pair = pairs[0];
+  const tradeProducts = one("#trade-products");
+  const productRequirements = one("#trade-product-requirements");
+  const requirementsList = one("#trade-requirements-list");
+  bilingual(one("#trade-requirements-title"), "五维门槛", "Five-dimensional requirements");
+  const dimensionNames = {
+    FC: ["财务承载力", "Financial capacity"],
+    RA: ["风险意愿", "Risk willingness"],
+    KE: ["认知与经验", "Knowledge and experience"],
+    BD: ["行为纪律", "Behavioral discipline"],
+    OC: ["目标与约束", "Objectives and constraints"],
+  };
+  let tradeCatalog = new Map(defaultPairs.map((symbol) => [symbol, { symbol }]));
+  let pair = defaultPairs[0];
   let side = "buy";
   let marketVersion = 0;
   let marketTimer;
@@ -201,7 +209,6 @@
   let chartMinutes = "5";
   let chartVersion = 0;
   let chartLoading = false;
-  const orderbookPrice = one("#orderbook-price");
   const marketGroups = one("#market-groups");
   bilingual(marketColumns[1], "买入价（Ask）", "Ask");
   bilingual(marketColumns[2], "卖出价（Bid）", "Bid");
@@ -217,6 +224,53 @@
   let submitting = false;
   let orderVersion = 0;
 
+  function updateTradeProductSelection() {
+    for (const button of tradeProducts.children) {
+      const active = button.dataset.pair === pair;
+      button.classList.toggle("is-selected", active);
+      button.setAttribute("aria-pressed", String(active));
+    }
+    const product = tradeCatalog.get(pair);
+    productRequirements.hidden = !product?.requirement_levels;
+    if (productRequirements.hidden) return;
+    requirementsList.replaceChildren(...Object.entries(product.requirement_levels).map(([code, level]) => {
+      const row = node("div");
+      row.dataset.dimension = code;
+      const label = node("dt");
+      bilingual(label, ...(dimensionNames[code] ?? [code, code]));
+      const threshold = node("dd");
+      const score = product.requirements[code];
+      if (level === 0) bilingual(threshold, "0 级 · 无门槛", "Level 0 · No minimum");
+      else bilingual(threshold, `${level} 级 · 至少 ${score} 分`, `Level ${level} · At least ${score} points`);
+      row.append(label, threshold);
+      return row;
+    }));
+  }
+
+  function renderTradeProducts() {
+    tradeProducts.replaceChildren(...Array.from(tradeCatalog.values(), (product) => {
+      const button = node("button", undefined, "da-watchrow");
+      button.type = "button";
+      button.dataset.pair = product.symbol;
+      button.append(node("strong", product.symbol));
+      button.addEventListener("click", () => choosePair(product.symbol));
+      return button;
+    }));
+    updateTradeProductSelection();
+  }
+
+  async function loadTradeProducts() {
+    renderTradeProducts();
+    try {
+      const { products } = await request("/api/trading/products");
+      if (!products.length) return;
+      tradeCatalog = new Map(products.map((product) => [product.symbol, product]));
+      renderTradeProducts();
+    } catch {
+      // Keep the existing three trading controls available if the AI service is offline.
+    }
+  }
+
   function labelOrderButton(confirming) {
     const [zh, en] = side === "buy" ? ["买入", "buy"] : ["卖出", "sell"];
     bilingual(submit, confirming ? `确认模拟${zh}` : `预览${zh}`,
@@ -230,14 +284,21 @@
       return;
     }
     const { code, risk_level: level, product_cap: cap, product_risk: product } = warning;
+    if (code === "profile_dimensions") {
+      const names = (warning.unmet_dimensions ?? []).map((dimension) => dimensionNames[dimension] ?? [dimension, dimension]);
+      bilingual(orderRisk,
+        `${names.map(([zh]) => zh).join("、")}未达到该币种的模拟匹配要求。`,
+        `${names.map(([, en]) => en).join(", ")} below this asset's simulation thresholds.`);
+      return;
+    }
     const messages = {
       assessment_required: [
         "尚未测评，买入风险待评估。",
         "No assessment yet. Purchase risk is unassessed.",
       ],
       product_cap: [
-        `你的等级 ${level}（上限 ${cap}），产品演示档位 ${product}。买入可能超出测评范围。`,
-        `Your level is ${level} (limit ${cap}). The demo product is ${product} and may exceed your risk tolerance.`,
+        `你的风险等级是 ${level}，产品上限为 ${cap}。这笔买入的产品档位 ${product} 超出了上限。`,
+        `Your risk level is ${level}. The product grade ${product} exceeds your ${cap} ceiling.`,
       ],
       assessment_prohibition: [
         "测评结果标记了买入风险，请查看你的风险说明后自行决定。",
@@ -312,7 +373,7 @@
     } catch {
       // A missing catalog leaves the existing trade pairs available.
     }
-    choosePair(0);
+    choosePair(pair);
     loadAssetGroups();
     if (!groupTimer) {
       groupTimer = setInterval(() => {
@@ -369,12 +430,12 @@
     const windowSize = Date.parse(end) - windowStart;
     const interval = result.interval_seconds * 1000;
     const left = 12, right = 670, top = 14, bottom = 268;
-    const padding = Math.max((high - low) * 0.12, 0.01);
-    const upper = high + padding, lower = low - padding;
+    const padding = Math.max((high - low) * 0.12, Math.min(high * 0.01, 0.01), 0.00000001);
+    const upper = high + padding, lower = Math.max(0, low - padding);
     const priceY = (price) => top + (upper - Number(price)) / (upper - lower) * (bottom - top);
     const candleWidth = Math.min(16, (right - left) * interval / windowSize * 0.65);
     const priceFormat = new Intl.NumberFormat(document.documentElement.lang, {
-      minimumFractionDigits: 2, maximumFractionDigits: high < 10 ? 4 : 2,
+      minimumFractionDigits: 2, maximumFractionDigits: high < 0.01 ? 8 : high < 10 ? 4 : 2,
     });
     for (const fraction of [0, 0.25, 0.5, 0.75, 1]) {
       const level = upper - (upper - lower) * fraction;
@@ -428,7 +489,6 @@
     ["区间最低", "Window low"], ["K 线数", "Candles"]];
   all(".da-chart-stats small").forEach((label, index) => bilingual(label, ...chartStatLabels[index]));
   bilingual(one("#trade-chart-caption"), "每 10 秒更新 · 时间为 UTC", "Updates every 10 sec · UTC");
-  bilingual(one("#trade-chart-disclaimer"), "报价走势，不代表实际成交", "Quote history, not actual trades");
   bilingual(one("#trade-chart-svg-title"), "下单价格走势图", "Order price chart");
   chartButtons.forEach((button) => {
     const minutes = button.dataset.chartRange;
@@ -448,9 +508,9 @@
 
   const FX_PER_USD = Object.freeze({ USD: 1, USDT: 1, HKD: 7.8 });
   const ASSET_GROUPS = Object.freeze([
-    { asset: "BTC", name: "Bitcoin" },
-    { asset: "ETH", name: "Ethereum" },
-    { asset: "SOL", name: "Solana" },
+    { asset: "BTC", zh: "比特币", en: "Bitcoin" },
+    { asset: "ETH", zh: "以太坊", en: "Ethereum" },
+    { asset: "SOL", zh: "索拉纳", en: "Solana" },
   ]);
   let groupVersion = 0;
   let groupTimer = null;
@@ -483,7 +543,10 @@
   }
 
   function groupContracts(asset) {
-    return (spotAssets.get(asset) || []).map((entry) => entry.symbol);
+    const contracts = spotAssets.get(asset);
+    return contracts?.length
+      ? contracts.map((entry) => entry.symbol)
+      : defaultPairs.filter((symbol) => symbol.startsWith(asset + "/"));
   }
 
   async function loadAssetGroup(asset) {
@@ -528,7 +591,7 @@
       bestAsk,
       bestBid,
       sourceCount: new Set(rows.map((row) => row.sourceRaw)).size,
-      simulated: rows.some((row) => /^demo:MDGateway:/i.test(row.sourceRaw)),
+      simulated: rows.some((row) => row.sourceRaw.startsWith("demo:")),
     };
   }
 
@@ -541,10 +604,11 @@
     bilingual(heading, `${definition.asset} 资产组`, `${definition.asset} asset group`);
     const details = node("p");
     const contractCount = data.rows.length;
-    const feedName = data.simulated ? "MDGateway simulator" : "Public spot feed";
+    const [feedZh, feedEn] = !data.rows.length ? ["暂无报价", "No quotes"]
+      : data.simulated ? ["模拟报价", "Simulated quotes"] : ["公开现货", "Public spot feed"];
     bilingual(details,
-      `${definition.name} · ${data.sourceCount} 家交易所 × ${contractCount} 个合约 · ${feedName}`,
-      `${definition.name} · ${data.sourceCount} venues × ${contractCount} contracts · ${feedName}`);
+      `${definition.zh} · ${data.sourceCount} 家交易所 · ${contractCount} 条报价 · ${feedZh}`,
+      `${definition.en} · ${data.sourceCount} venues · ${contractCount} quotes · ${feedEn}`);
     details.dataset.contractCount = String(contractCount);
     copy.append(heading, details);
     title.append(badge, copy);
@@ -611,28 +675,21 @@
       const contractTag = node("span", row.contract, "da-contract");
       contract.append(contractTag);
       const ask = node("td");
-      ask.append(
-        node("span", formatGroupPrice(row.ask, row.currency)),
-        node("small", `USD 等值 ${formatGroupPrice(row.askUsd, "USD")}`, "da-normalized"),
-      );
+      ask.append(node("span", formatGroupPrice(row.ask, row.currency)));
+      if (row.currency !== "USD") ask.append(node("small", formatGroupPrice(row.askUsd), "da-normalized"));
       if (row.bestAsk) {
         ask.classList.add("is-nbbo-ask");
         ask.append(node("span", "NBBO", "da-nbbo-pill"));
       }
       const bid = node("td");
-      bid.append(
-        node("span", formatGroupPrice(row.bid, row.currency)),
-        node("small", `USD 等值 ${formatGroupPrice(row.bidUsd, "USD")}`, "da-normalized"),
-      );
+      bid.append(node("span", formatGroupPrice(row.bid, row.currency)));
+      if (row.currency !== "USD") bid.append(node("small", formatGroupPrice(row.bidUsd), "da-normalized"));
       if (row.bestBid) {
         bid.classList.add("is-nbbo-bid");
         bid.append(node("span", "NBBO", "da-nbbo-pill"));
       }
       const mid = node("td");
-      mid.append(
-        node("span", formatGroupPrice((row.askUsd + row.bidUsd) / 2, "USD")),
-        node("small", `原价 ${formatGroupPrice((row.ask + row.bid) / 2, row.currency)}`, "da-normalized"),
-      );
+      mid.append(node("span", formatGroupPrice((row.askUsd + row.bidUsd) / 2)));
       const timestamp = node("td", time(row.asOf));
       timestamp.className = "da-group-time";
       tr.append(venue, contract, ask, bid, mid, timestamp);
@@ -675,11 +732,10 @@
     const version = ++marketVersion;
     const symbol = publicPair.value || pair;
     const orderPair = pair;
-    const canTrade = pairs.includes(symbol);
+    const canTrade = tradeCatalog.has(symbol);
     text(one(".da-order h2"), pair);
     text(amount.closest("label").querySelector("b"), pair.split("/")[0]);
     if (!background) {
-      text(one(".da-clock"), "—");
       text(one(".da-fresh"), "—");
       marketBody.replaceChildren();
       bilingual(marketNotice, "正在读取中台报价…", "Loading middle-office quotes…");
@@ -714,7 +770,7 @@
           action = node("button", "", "da-rowbtn");
           action.type = "button";
           bilingual(action, "选择", "Select");
-          action.addEventListener("click", () => { choosePair(pairs.indexOf(symbol), quote.source); navigate("trade"); });
+          action.addEventListener("click", () => { choosePair(symbol, quote.source); navigate("trade"); });
         }
         const timestamp = node("span", time(quote.as_of));
         if (quote.timestamp_source === "collected") bilingual(timestamp, `${time(quote.as_of)} · 采集`, `${time(quote.as_of)} · collected`);
@@ -735,41 +791,32 @@
           publicMarket ? money(quote.ask_size, symbol.split("/")[0]) : fee, timestamp, notional, action]);
       }
       const latest = result.venues.map((quote) => quote.as_of).sort().at(-1);
-      text(one(".da-clock"), time(latest));
-      if (publicMarket) bilingual(one(".da-fresh"), `公开现货 · ${time(latest)}`, `Public spot · ${time(latest)}`);
+      if (publicMarket && !simulatedFeed) bilingual(one(".da-fresh"), `公开现货 · ${time(latest)}`, `Public spot · ${time(latest)}`);
       else bilingual(one(".da-fresh"), `模拟 · ${time(latest)}`, `Simulation · ${time(latest)}`);
       const best = orderQuotes.venues[0];
       text(one(".da-quote-pill"), best ? money(best.price, best.quote_currency) : "—");
-      text(orderbookPrice, best ? money(best.price, best.quote_currency) : "—");
-      if (publicMarket) {
-        const unavailable = [...result.excluded_sources, ...result.missing_sources];
-        const details = unavailable.length ? ` · ${unavailable.join(", ")}` : "";
-        if (result.status === "ok") bilingual(marketNotice, `报价未计交易费，订单仍为模拟${details}`, `Fees excluded; simulated orders only${details}`);
-        else bilingual(marketNotice, `当前可比报价不足两家${details}`, `Fewer than two current quotes${details}`);
-      } else if (result.status === "ok") bilingual(marketNotice, "模拟报价。按买卖价全量模拟成交。", "Simulated quotes. Full fills at bid or ask are assumed.");
+      if (result.status === "ok") text(marketNotice, "");
       else bilingual(marketNotice, "有效报价不足两家。", "Fewer than two current venues are available.");
     } catch (error) {
       if (version === marketVersion) {
         marketBody.replaceChildren();
         text(one(".da-quote-pill"), "—");
-        text(orderbookPrice, "—");
-        text(one(".da-clock"), "—");
         text(one(".da-fresh"), "—");
-        text(marketNotice, errorMessage(error));
+        bilingual(marketNotice, ...requestError(error, "报价暂不可用。", "Quotes are temporarily unavailable."));
       }
     }
   }
 
-  function choosePair(index, selectedVenue = "") {
-    const nextPair = pairs[index];
+  function choosePair(nextPair, selectedVenue = "") {
+    if (!tradeCatalog.has(nextPair)) return;
     const pairChanged = nextPair !== pair;
     pair = nextPair;
-    for (const group of [assets, watch]) {
-      group.forEach((button, position) => {
-        button.classList.toggle("is-selected", position === index);
-        button.setAttribute("aria-pressed", String(position === index));
-      });
-    }
+    assets.forEach((button, position) => {
+      const active = defaultPairs[position] === pair;
+      button.classList.toggle("is-selected", active);
+      button.setAttribute("aria-pressed", String(active));
+    });
+    updateTradeProductSelection();
     invalidateOrder();
     text(one(".da-quote-pill"), "—");
     setVenues([], selectedVenue);
@@ -777,9 +824,8 @@
     if (pairChanged) loadPriceChart(true);
   }
 
-  pairs.forEach((_, index) => {
-    assets[index].addEventListener("click", () => choosePair(index));
-    watch[index].addEventListener("click", () => choosePair(index));
+  defaultPairs.forEach((symbol, index) => {
+    assets[index].addEventListener("click", () => choosePair(symbol));
   });
   publicAsset.addEventListener("change", () => {
     refreshQuoteCurrencies();
@@ -808,10 +854,12 @@
       if (confirming) {
         const result = await request("/api/orders", "POST", { preview_id: preview.preview_id });
         invalidateOrder();
-        const names = { filled: ["已成交", "Filled"], open: ["已挂单", "Open"], rejected: ["已拒绝", "Rejected"] };
-        const [zh, en] = names[result.status] || [result.status, result.status];
-        const detail = result.reason ? ` · ${result.reason}` : "";
-        bilingual(orderNotice, zh + detail, en + detail);
+        const names = { filled: ["已成交", "Filled"], open: ["已挂单", "Open"],
+          rejected: ["委托被拒绝", "Order rejected"], cancelled: ["已撤单", "Cancelled"] };
+        const [zh, en] = result.reason && apiMessages.has(result.reason)
+          ? apiMessages.get(result.reason)
+          : names[result.status] ?? ["订单状态已更新", "Order status updated"];
+        bilingual(orderNotice, zh, en);
         orderStatus.hidden = false;
         showSuitabilityWarning(result.suitability_warning);
         loadAccount();
@@ -825,15 +873,15 @@
         showSuitabilityWarning(result.suitability_warning);
         for (const key of ["notional", "fee", "total"]) text(one(`#order-${key}`), money(result[key], result.quote_currency));
         labelOrderButton(true);
-        const feeZh = result.fee_assumed ? " · 模拟手续费按 0 计" : "";
-        const feeEn = result.fee_assumed ? " · Simulated fee assumed zero" : "";
+        const feeZh = result.fee_assumed ? " · 手续费暂按 0 估算" : "";
+        const feeEn = result.fee_assumed ? " · Fee estimated at zero" : "";
         bilingual(orderNotice, `${result.source} · ${result.expires_in} 秒内确认${feeZh}`, `${result.source} · Confirm within ${result.expires_in}s${feeEn}`);
         orderStatus.hidden = false;
       }
     } catch (error) {
       if (error.code === "preview_expired") invalidateOrder();
       if (version === orderVersion || confirming) {
-        text(orderNotice, errorMessage(error));
+        bilingual(orderNotice, ...requestError(error, "暂时无法处理订单，请重试。", "Could not process the order. Try again."));
         orderStatus.hidden = false;
       }
     } finally {
@@ -845,6 +893,7 @@
   const lessonTitle = one("#lesson-title");
   const lessonFocus = one("#lesson-focus");
   const lessonContent = one("#lesson-content");
+  const lessonAssets = one("#lesson-assets");
   const lessonTrade = one("#lesson-trade");
   const lessonRetry = one("#lesson-retry");
   let lessonVersion = 0;
@@ -853,6 +902,7 @@
     const version = ++lessonVersion;
     lesson.hidden = false;
     lessonFocus.hidden = lessonTrade.hidden = lessonRetry.hidden = true;
+    lessonAssets.hidden = true;
     bilingual(lessonTitle, "对应投教", "Tailored lesson");
     bilingual(lessonContent, "正在加载…", "Loading…");
     try {
@@ -865,6 +915,17 @@
         bilingual(lessonFocus, `${label.zh} · ${score} / 100`, `${label.en} · ${score} / 100`);
         lessonFocus.hidden = false;
       }
+      const examples = data.asset_examples ?? [];
+      lessonAssets.replaceChildren(...examples.map((product) => {
+        const example = node("li");
+        const needsOc = product.group === "stablecoin" && product.unmet?.includes("OC");
+        const basisZh = `${product.symbol} · ${product.basis.zh}`;
+        const basisEn = `${product.symbol} · ${product.basis.en}`;
+        bilingual(example, needsOc ? `${basisZh} ${product.reasons.zh}` : basisZh,
+          needsOc ? `${basisEn} ${product.reasons.en}` : basisEn);
+        return example;
+      }));
+      lessonAssets.hidden = examples.length === 0;
       bilingual(lessonTrade, "打开模拟下单页", "Open simulated order page");
       lessonTrade.hidden = false;
       if (!one("#screen-assistant").hidden) lessonTitle.focus();
@@ -916,12 +977,14 @@
     replyModel.hidden = true;
     input.focus();
   });
-  all("[data-assistant-prompt]").forEach((button) => button.addEventListener("click", () => {
-    input.value = document.documentElement.lang === "en"
-      ? button.dataset.promptEn
-      : button.dataset.promptZh;
-    input.focus();
-  }));
+  function localizeKeyPlaceholder() {
+    const keepsKey = apiProviders.has(modelProvider.value) && savedKeyProvider === modelProvider.value;
+    apiKey.placeholder = keepsKey
+      ? (document.documentElement.lang === "en" ? "Leave blank to keep the saved key" : "留空可保留已保存的 Key")
+      : "";
+  }
+
+  document.addEventListener("harbor-language", localizeKeyPlaceholder);
 
   function refreshModelFields() {
     const usingOllama = modelProvider.value === "ollama";
@@ -933,9 +996,7 @@
     const keepsKey = savedKeyProvider === modelProvider.value;
     apiKey.required = Boolean(provider && !keepsKey);
     apiAgree.required = Boolean(provider);
-    apiKey.placeholder = provider && keepsKey
-      ? (document.documentElement.lang === "en" ? "Leave blank to keep the saved key" : "留空可保留已保存的 Key")
-      : "";
+    localizeKeyPlaceholder();
     if (provider) {
       text(one("#api-key-label"), `${provider.name} API Key`);
       bilingual(one("#api-model-consent"),
@@ -1024,7 +1085,10 @@
 
   function addMessage(author, content) {
     const entry = node("div", undefined, `da-message da-message-${author}`);
-    entry.append(node("div", content, "da-bubble"));
+    const bubble = node("div", undefined, "da-bubble");
+    if (typeof content === "string") text(bubble, content);
+    else bilingual(bubble, content.zh, content.en);
+    entry.append(bubble);
     messages.append(entry);
     entry.scrollIntoView({ block: "nearest" });
   }
@@ -1034,10 +1098,15 @@
     const explicit = message.match(/\b[A-Z0-9]{2,12}[\/_-][A-Z0-9]{2,12}\b/gi);
     if (explicit) return [...new Set(explicit.map((value) => value.toUpperCase()))].slice(0, 5);
     const named = [/\b(BTC|Bitcoin)\b|比特币/i, /\b(ETH|Ethereum)\b|以太/i, /\b(SOL|Solana)\b|索拉纳/i];
-    const selected = pairs.filter((_, index) => named[index].test(message));
-    const otherTickers = (message.match(/\b[A-Z][A-Z0-9]{1,11}\b/g) || [])
-      .filter((ticker) => !["USDT", "AI"].includes(ticker) && !named.some((name) => name.test(ticker)));
-    return [...new Set([...selected, ...otherTickers])].slice(0, 5);
+    const selected = defaultPairs.filter((_, index) => named[index].test(message));
+    const words = message.match(/\b[A-Z][A-Z0-9]{1,11}\b/gi) ?? [];
+    for (const word of words) {
+      const ticker = word.toUpperCase();
+      if (named.some((name) => name.test(ticker))) continue;
+      if (tradeCatalog.has(`${ticker}/USDT`)) selected.push(`${ticker}/USDT`);
+      else if (word === ticker && !["USDT", "AI"].includes(ticker)) selected.push(ticker);
+    }
+    return [...new Set(selected)].slice(0, 5);
   }
 
   one("#assistant-form").addEventListener("submit", async (event) => {
@@ -1050,24 +1119,33 @@
     input.value = "";
     try {
       const data = await request("/api/assistant/chat", "POST", { message, history, market_queries: marketQueries(message) });
-      addMessage("ai", data.reply);
+      const generated = ["local_model", "remote_model"].includes(data.generation);
+      if (data.reply) addMessage("ai", data.reply);
+      if (data.model_status?.message && !generated) addMessage("ai", data.model_status.message);
       if (data.generation === "local_model") {
         text(replyModel, data.model_name ? `Ollama · ${data.model_name}` : "Ollama");
       } else if (data.generation === "remote_model") {
         text(replyModel, data.model_name ? `API · ${data.model_name}` : "API");
-      } else if (data.generation === "template_model_unavailable") {
-        bilingual(replyModel, "模型不可用 · 内置回复", "Model unavailable · Built-in reply");
+      } else if (data.generation === "model_not_configured") {
+        bilingual(replyModel, "尚未配置模型", "Model setup required");
+      } else if (data.generation === "model_unavailable") {
+        bilingual(replyModel, "模型调用失败", "Model request failed");
+      } else if (data.generation === "model_privacy_blocked") {
+        bilingual(replyModel, "账户数据仅本机处理", "Account data stays local");
+      } else if (data.generation === "policy_guard") {
+        bilingual(replyModel, "回复未通过核验", "Response verification failed");
       } else {
-        bilingual(replyModel, "内置回复", "Built-in reply");
+        bilingual(replyModel, "测评与数据规则", "Assessment and data rules");
       }
       replyModel.hidden = false;
+      if (!data.reply && !input.value) input.value = message;
       // Account facts stay out of the browser-provided history for later model calls.
-      if (!data.account) {
+      if (generated && !data.account) {
         history = [...history, { role: "user", content: message.slice(0, 800) },
           { role: "assistant", content: data.reply.slice(0, 800) }].slice(-6);
       }
-    } catch (error) {
-      addMessage("ai", errorMessage(error));
+    } catch {
+      addMessage("ai", {zh: "暂时无法发送消息，请重试。", en: "Could not send the message. Try again."});
       input.value = message;
     } finally {
       send.disabled = newChat.disabled = false;
@@ -1096,11 +1174,16 @@
   let accountVersion = 0;
 
   function loadOpenOrders(orders) {
+    pending.hidden = orders.length === 0;
     const heading = node("strong");
     bilingual(heading, `挂单（${orders.length}）`, `Open orders (${orders.length})`);
     const list = node("ul");
     for (const order of orders) {
-      const item = node("li", `${order.symbol} · ${order.side} · ${order.quantity} @ ${order.limit_price ?? "—"} `);
+      const item = node("li");
+      const terms = node("span");
+      const [zh, en] = order.side === "buy" ? ["买入", "Buy"] : ["卖出", "Sell"];
+      const details = `${order.quantity} @ ${order.limit_price ?? "—"}`;
+      bilingual(terms, `${order.symbol} · ${zh} · ${details}`, `${order.symbol} · ${en} · ${details}`);
       const cancel = node("button", "", "da-rowbtn");
       cancel.type = "button";
       bilingual(cancel, "撤单", "Cancel order");
@@ -1110,11 +1193,11 @@
           await request(`/api/orders/${order.order_id}/cancel`, "POST", {});
           await loadAccount();
         } catch (error) {
-          text(accountNotice, errorMessage(error));
+          bilingual(accountNotice, ...requestError(error, "撤单失败，请重试。", "Could not cancel the order. Try again."));
           cancel.disabled = false;
         }
       });
-      item.append(cancel);
+      item.append(terms, " ", cancel);
       list.append(item);
     }
     pending.replaceChildren(heading, list);
@@ -1151,6 +1234,55 @@
 
   historyMore.addEventListener("click", () => loadTradeHistory(accountVersion, historyOffset));
 
+  const depositDialog = one("#deposit-dialog");
+  const depositAmount = one("#deposit-amount");
+  const depositSubmit = one("#deposit-submit");
+  const depositCancel = one("#deposit-cancel");
+  const depositStatus = one("#deposit-status");
+  const depositResult = one("#deposit-result");
+  let depositRequest = null;
+
+  one("#deposit-open").addEventListener("click", () => {
+    text(depositStatus, "");
+    depositDialog.showModal();
+  });
+  depositCancel.addEventListener("click", () => depositDialog.close());
+  depositDialog.addEventListener("cancel", (event) => {
+    if (depositSubmit.disabled) event.preventDefault();
+  });
+  depositAmount.addEventListener("input", () => text(depositStatus, ""));
+  one("#deposit-form").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    if (depositSubmit.disabled) return;
+    const amount = depositAmount.value.trim();
+    if (!/^\d+(?:\.\d{1,8})?$/.test(amount) || !/[1-9]/.test(amount)) {
+      bilingual(depositStatus, "请输入大于 0 的金额，最多 8 位小数。", "Enter a positive amount with up to 8 decimal places.");
+      depositAmount.focus();
+      return;
+    }
+    if (depositRequest?.amount !== amount) depositRequest = { amount, request_id: crypto.randomUUID() };
+    depositAmount.disabled = depositSubmit.disabled = depositCancel.disabled = true;
+    bilingual(depositStatus, "正在充值…", "Adding funds…");
+    try {
+      const receipt = await request("/api/account/deposits", "POST", depositRequest);
+      const credited = money(receipt.amount, receipt.currency);
+      depositRequest = null;
+      depositAmount.value = "";
+      depositDialog.close();
+      bilingual(depositResult, `已充值 ${credited}`, `Added ${credited}`);
+      depositResult.hidden = false;
+      loadAccount();
+    } catch (error) {
+      if (error.code === "invalid_number" || error.code === "invalid_amount") {
+        bilingual(depositStatus, "金额超出账户上限。", "The amount exceeds the account limit.");
+      } else {
+        bilingual(depositStatus, "充值未确认，请重试。", "Top-up unconfirmed. Please retry.");
+      }
+    } finally {
+      depositAmount.disabled = depositSubmit.disabled = depositCancel.disabled = false;
+    }
+  });
+
   async function loadAccount() {
     const version = ++accountVersion;
     holdings.replaceChildren();
@@ -1180,22 +1312,33 @@
         holding.source, time(holding.as_of)]);
       loadOpenOrders(data.account.open_orders);
       if (data.state === "ok") text(accountNotice, "");
-      else bilingual(accountNotice, `账本数据不完整 · ${data.reasons.join(", ")}`, `Partial ledger data · ${data.reasons.join(", ")}`);
+      else if (data.reasons.includes("missing_or_stale_quote")) {
+        bilingual(accountNotice, "部分持仓缺少近期报价。", "Some holdings lack a recent quote.");
+      } else {
+        bilingual(accountNotice, "部分账户数据暂不可用。", "Some account data is unavailable.");
+      }
       try {
         const risk = await request(`/api/risk?${new URLSearchParams({ quote_currency: currency })}`);
         if (version !== accountVersion) return;
-        const exposure = money(risk.summary?.gross_exposure, currency);
-        bilingual(riskNotice, `AI 风险 · ${risk.state} · 总敞口 ${exposure}`, `AI risk · ${risk.state} · Gross exposure ${exposure}`);
-      } catch (error) {
-        if (version === accountVersion) bilingual(riskNotice, `AI 风险读取失败 · ${errorMessage(error)}`, `AI risk unavailable · ${errorMessage(error)}`);
+        const exposure = risk.summary?.gross_exposure;
+        if (risk.state === "ok" && exposure != null) {
+          bilingual(riskNotice, `总敞口 ${money(exposure, currency)}`, `Gross exposure ${money(exposure, currency)}`);
+        } else if (risk.state === "partial") {
+          bilingual(riskNotice, "部分持仓暂无法计入风险统计。", "Some holdings could not be included in the risk totals.");
+        } else {
+          bilingual(riskNotice, "风险统计暂不可用。", "Risk totals are temporarily unavailable.");
+        }
+      } catch {
+        if (version === accountVersion) bilingual(riskNotice, "风险统计暂不可用。", "Risk totals are temporarily unavailable.");
       }
-    } catch (error) {
+    } catch {
       if (version !== accountVersion) return;
-      text(accountNotice, errorMessage(error));
+      bilingual(accountNotice, "账户数据暂不可用。", "Account data is temporarily unavailable.");
     }
   }
 
   one('[data-screen-target="account"]').addEventListener("click", loadAccount);
+  loadTradeProducts();
   initializeMarket();
   loadAccount();
 })();

@@ -13,13 +13,15 @@ from .validation import BusinessError, amount, asset, identifier, iso, number, p
 D = Decimal
 DEFAULT_LIMITS = {"max_order_notional": "100000", "concentration_pct": "60", "loss_pct": "10",
                   "aml_large_trade": "10000", "aml_frequency": 5, "aml_window_seconds": 60}
+PROFILE_DIMENSIONS = frozenset(("FC", "RA", "KE", "BD", "OC"))
 
 
 class MiddleOffice:
     def __init__(self, db_path, *, clock=None, max_quote_age=120, product_risks=None, public_sources=(),
-                 suitability_advisory=False, public_source_pairs=None):
+                 suitability_advisory=False, public_source_pairs=None, product_requirements=None,
+                 chart_pairs=None):
         self.store = Store(db_path)
-        self.price_history = PriceHistory()
+        self.price_history = PriceHistory(chart_pairs)
         self.clock = clock or (lambda: datetime.now(timezone.utc))
         require(type(max_quote_age) is int and max_quote_age > 0, "invalid_config", "max_quote_age must be positive")
         self.max_quote_age = max_quote_age
@@ -30,6 +32,16 @@ class MiddleOffice:
         require(isinstance(self.product_risks, dict), "invalid_product_risks", "product risk map must be an object")
         require(all(pair(k) == k and type(v) is int and 1 <= v <= 5 for k, v in self.product_risks.items()),
                 "invalid_product_risks", "map normalized pairs to demo risk levels 1-5")
+        self.product_requirements = {} if product_requirements is None else product_requirements
+        require(isinstance(self.product_requirements, dict), "invalid_product_requirements",
+                "product requirements must map normalized pairs to dimension thresholds")
+        require(all(
+            pair(symbol) == symbol and isinstance(requirements, dict)
+            and not requirements.keys() - PROFILE_DIMENSIONS
+            and all(type(threshold) is int and 0 <= threshold <= 100
+                    for threshold in requirements.values())
+            for symbol, requirements in self.product_requirements.items()
+        ), "invalid_product_requirements", "use FC, RA, KE, BD and OC thresholds from 0 to 100")
 
     def _account(self, state, user):
         identifier(user)
@@ -81,6 +93,32 @@ class MiddleOffice:
             state["accounts"][user] = account
             self._audit(state, user, "account_created", user)
         return {"user_id": user, "valuation_currency": currency, "balances": cash, "mode": "simulation"}
+
+    def deposit(self, user, payload):
+        identifier(user)
+        require(isinstance(payload, dict) and not payload.keys() - {"amount", "request_id"},
+                "invalid_deposit", "provide amount and request_id")
+        request_id = identifier(payload.get("request_id"), "request_id")
+        credited = amount(number(payload.get("amount"), "amount", positive=True))
+        with self.store.transaction(write=True) as state:
+            account = self._account(state, user)
+            require(account["valuation_currency"] == "USDT", "currency_mismatch",
+                    "simulated top-ups require a USDT account", 409)
+            deposits = state.setdefault("deposits", {})
+            key = user + ":" + request_id
+            previous = deposits.get(key)
+            if previous is not None:
+                require(previous["amount"] == credited, "request_conflict",
+                        "request_id reused with a different top-up amount", 409)
+                return previous.copy()
+            total = number(D(account["balances"].get("USDT", "0")) + D(credited), "USDT balance")
+            available = total - self._reserved(state, user, currency="USDT")
+            receipt = {"deposit_id": "dep_" + uuid.uuid4().hex, "currency": "USDT", "amount": credited,
+                       "total": amount(total), "available": amount(available), "mode": "simulation"}
+            account["balances"]["USDT"] = receipt["total"]
+            deposits[key] = receipt
+            self._audit(state, user, "simulated_deposit", receipt["deposit_id"])
+        return receipt.copy()
 
     def preferences(self, user, payload=None):
         with self.store.transaction(write=payload is not None) as state:
@@ -231,6 +269,9 @@ class MiddleOffice:
     def price_chart(self, symbol, minutes="5"):
         return self.price_history.chart(symbol, minutes, self.clock(), self.max_quote_age)
 
+    def market_trends(self):
+        return self.price_history.trends(self.clock(), self.max_quote_age)
+
     def quotes(self, query="", limit=20, *, all_sources=False):
         require(type(limit) is int and 1 <= limit <= 50, "invalid_limit", "limit must be 1-50")
         require(isinstance(query, str) and len(query) <= 80, "invalid_query", "q must be at most 80 characters")
@@ -297,6 +338,12 @@ class MiddleOffice:
 
     def market_catalog(self):
         pairs = {}
+        if not self.public_sources:
+            with self.store.transaction() as state:
+                for quote in sorted(state["quotes"].values(), key=lambda row: (row["symbol"], row["source"])):
+                    if self._visible_quote(quote):
+                        pairs.setdefault(quote["symbol"], []).append(quote["source"])
+            return {"market_mode": "simulation", "pairs": pairs}
         for source in sorted(self.public_sources):
             for symbol in self.public_source_pairs.get(source, ()):
                 pairs.setdefault(symbol, []).append(source)
@@ -404,17 +451,26 @@ class MiddleOffice:
         assessment = account["assessment"]["assessment"] if account["assessment"] else {}
         risk = self.product_risks.get(order["symbol"])
         cap = assessment.get("product_cap")
+        requirements = self.product_requirements.get(order["symbol"], {})
+        scores = assessment.get("dimensions", {})
+        unmet = [code for code, minimum in requirements.items()
+                 if type(scores.get(code)) not in (int, float) or scores[code] < minimum]
         if assessment.get("prohibitions"):
             code, message = "assessment_prohibition", "upstream assessment prohibits new buys"
-        elif not assessment and (risk is not None or self.suitability_advisory):
+        elif not assessment and (risk is not None or requirements or self.suitability_advisory):
             code, message = "assessment_required", "this configured product requires an assessment"
         elif risk is not None and cap and risk > int(cap[1]):
             code, message = "product_cap", "product exceeds questionnaire risk cap"
+        elif unmet:
+            code, message = "profile_dimensions", "profile dimensions are below the configured product thresholds"
         else:
             return
         require(self.suitability_advisory, code, message, 409)
-        return {"code": code, "risk_level": assessment.get("risk_level"), "product_cap": cap,
-                "product_risk": f"R{risk}" if risk is not None else None}
+        warning = {"code": code, "risk_level": assessment.get("risk_level"), "product_cap": cap,
+                   "product_risk": f"R{risk}" if risk is not None else None}
+        if code == "profile_dimensions":
+            warning["unmet_dimensions"] = unmet
+        return warning
 
     def _execution_quote(self, state, order):
         candidates = [q for q in state["quotes"].values() if q["symbol"] == order["symbol"]

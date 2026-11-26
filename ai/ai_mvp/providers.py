@@ -286,6 +286,70 @@ class MarketUnavailable(RuntimeError):
     """A market upstream failed or returned invalid quote data."""
 
 
+def _trend_snapshot(payload):
+    if not isinstance(payload, dict) or type(payload.get("window_seconds")) is not int or payload["window_seconds"] != 10:
+        raise ValueError("trend snapshot must use a ten-second window")
+    as_of = _timestamp(payload.get("as_of"))
+    start = _timestamp(payload.get("start"))
+    snapshot_time = datetime.fromisoformat(as_of.replace("Z", "+00:00"))
+    start_time = datetime.fromisoformat(start.replace("Z", "+00:00"))
+    if snapshot_time - start_time != timedelta(seconds=10):
+        raise ValueError("trend window boundaries disagree")
+    incoming = payload.get("rows")
+    if not isinstance(incoming, list) or len(incoming) > 500:
+        raise ValueError("trend rows must be a bounded list")
+    if payload.get("status") != ("ok" if incoming else "empty"):
+        raise ValueError("trend snapshot status disagrees with rows")
+
+    rows, seen = [], set()
+    for record in incoming:
+        if not isinstance(record, dict):
+            raise ValueError("each trend row must be an object")
+        symbol = _pair(_required_text(record.get("symbol"), "symbol"))
+        if symbol is None or symbol in seen or record.get("quote_currency") != symbol.split("/")[1]:
+            raise ValueError("trend symbols must be distinct normalized pairs")
+        seen.add(symbol)
+        source = _required_text(record.get("source"), "source")
+        simulated = source == "demo" or source.startswith("demo:")
+        quote_mode = "simulation" if simulated else "public"
+        if record.get("quote_mode") != quote_mode:
+            raise ValueError("trend quote mode disagrees with its source")
+        count = record.get("sample_count")
+        if type(count) is not int or not 1 <= count <= 10_000:
+            raise ValueError("trend sample count must be a positive integer")
+        first, last = _timestamp(record.get("first_as_of")), _timestamp(record.get("last_as_of"))
+        if not start <= first <= last <= as_of:
+            raise ValueError("trend observations must be inside the window")
+        prices = {key: _decimal(record.get(key), key, positive=True) for key in ("open", "last", "low", "high")}
+        numbers = {key: Decimal(value) for key, value in prices.items()}
+        if not numbers["low"] <= min(numbers["open"], numbers["last"]) <= max(numbers["open"], numbers["last"]) <= numbers["high"]:
+            raise ValueError("trend price bounds disagree")
+        status = "single_sample" if count == 1 else "trend"
+        change = None
+        direction = None
+        if status == "single_sample":
+            if first != last or len(set(numbers.values())) != 1 or record.get("change_pct") is not None:
+                raise ValueError("a single observation cannot establish a trend")
+        else:
+            if first == last:
+                raise ValueError("trend observations require distinct timestamps")
+            change = _decimal(record.get("change_pct"), "change_pct")
+            direction = "up" if numbers["last"] > numbers["open"] else "down" if numbers["last"] < numbers["open"] else "flat"
+            if (direction == "up" and Decimal(change) < 0) or (direction == "down" and Decimal(change) > 0):
+                raise ValueError("trend change direction disagrees with prices")
+        if record.get("status") != status:
+            raise ValueError("trend row status disagrees with its sample count")
+        rows.append({"symbol": symbol, "quote_currency": symbol.split("/")[1], "source": source,
+                     "quote_mode": quote_mode, "status": status, "sample_count": count,
+                     "first_as_of": first, "last_as_of": last, **prices,
+                     "change_pct": change, "direction": direction})
+
+    age = (datetime.now(timezone.utc) - snapshot_time).total_seconds()
+    status = "future" if age < -QUOTE_CLOCK_SKEW_SECONDS else "stale" if age > 10 else payload["status"]
+    return {"as_of": as_of, "window_seconds": 10, "start": start, "status": status,
+            "rows": rows if status in {"ok", "empty"} else []}
+
+
 class HttpMarketProvider:
     """Search upstream candidates and validate them with the local quote index.
 
@@ -338,17 +402,8 @@ class HttpMarketProvider:
         parameters = {"q": query, "limit": max(2, limit)}
         if self._include_venues:
             parameters.update(all_sources="true", limit=max(20, limit))
-        request = Request(f"{self._base_url}/quotes?{urlencode(parameters)}", headers=self._headers, method="GET")
+        payload = self._get_json(f"/quotes?{urlencode(parameters)}", "invalid quote data")
         try:
-            with self._opener.open(request, timeout=self._timeout) as response:
-                raw = response.read(_MAX_SNAPSHOT_BYTES + 1)
-        except (OSError, HTTPException, ValueError):
-            raise MarketUnavailable("market upstream is unavailable") from None
-
-        if len(raw) > _MAX_SNAPSHOT_BYTES:
-            raise MarketUnavailable("market upstream returned invalid quote data")
-        try:
-            payload = json.loads(raw)
             quotes = payload.get("quotes") if isinstance(payload, dict) else None
             if not isinstance(quotes, list) or len(quotes) > _MAX_MARKET_ROWS:
                 raise ValueError("quotes must be a bounded list")
@@ -362,6 +417,28 @@ class HttpMarketProvider:
 
         result["query"] = query
         return result
+
+    def _get_json(self, path, invalid_message):
+        request = Request(self._base_url + path, headers=self._headers, method="GET")
+        try:
+            with self._opener.open(request, timeout=self._timeout) as response:
+                raw = response.read(_MAX_SNAPSHOT_BYTES + 1)
+        except (OSError, HTTPException, ValueError):
+            raise MarketUnavailable("market upstream is unavailable") from None
+
+        if len(raw) > _MAX_SNAPSHOT_BYTES:
+            raise MarketUnavailable(f"market upstream returned {invalid_message}")
+        try:
+            return json.loads(raw)
+        except (ValueError, RecursionError):
+            raise MarketUnavailable(f"market upstream returned {invalid_message}") from None
+
+    def trends(self):
+        payload = self._get_json("/market/trends", "invalid trend data")
+        try:
+            return _trend_snapshot(payload)
+        except (ValueError, RecursionError):
+            raise MarketUnavailable("market upstream returned invalid trend data") from None
 
     @staticmethod
     def _venue_quotes(quotes, symbol):
@@ -435,8 +512,24 @@ def _account_snapshot(payload: object) -> dict:
     }
 
 
+def _holdings_snapshot(payload: object) -> dict:
+    if not isinstance(payload, dict) or payload.get("state") not in ("ok", "partial"):
+        raise ValueError("invalid analysis snapshot")
+    portfolio = payload.get("portfolio")
+    positions = portfolio.get("positions") if isinstance(portfolio, dict) else None
+    if not isinstance(positions, list) or any(not isinstance(row, dict) for row in positions):
+        raise ValueError("snapshot must contain portfolio positions")
+    held = [row for row in map(_position, positions) if Decimal(row["quantity"]) != 0]
+    return {
+        "state": "ok",
+        "as_of": _timestamp(payload.get("as_of")),
+        "positions": held[:_MAX_ACCOUNT_ROWS],
+        "truncated": len(held) > _MAX_ACCOUNT_ROWS,
+    }
+
+
 class HttpTradingProvider:
-    """Fetch account positions and open orders with a read-only GET request."""
+    """Read account snapshots from middle office."""
 
     def __init__(self, base_url: str, *, token: str | None = None, timeout: float = 2.0) -> None:
         url = urlsplit(base_url)
@@ -456,9 +549,15 @@ class HttpTradingProvider:
         self._opener = build_opener(_NoRedirect)
 
     def snapshot(self, user_id: str) -> dict:
+        return self._read_snapshot(user_id, "snapshot", _account_snapshot)
+
+    def holdings(self, user_id: str) -> dict:
+        return self._read_snapshot(user_id, "analysis_snapshot", _holdings_snapshot)
+
+    def _read_snapshot(self, user_id, endpoint, normalize):
         if not isinstance(user_id, str) or not user_id.strip() or user_id in {".", ".."}:
             return {"state": "unavailable", "reason": "invalid_user_id"}
-        url = f"{self._base_url}/accounts/{quote(user_id, safe='')}/snapshot"
+        url = f"{self._base_url}/accounts/{quote(user_id, safe='')}/{endpoint}"
         request = Request(url, headers=self._headers, method="GET")
         try:
             with self._opener.open(request, timeout=self._timeout) as response:
@@ -469,6 +568,6 @@ class HttpTradingProvider:
         if len(raw) > _MAX_SNAPSHOT_BYTES:
             return {"state": "unavailable", "reason": "invalid_response"}
         try:
-            return _account_snapshot(json.loads(raw))
+            return normalize(json.loads(raw))
         except (ValueError, RecursionError):
             return {"state": "unavailable", "reason": "invalid_response"}

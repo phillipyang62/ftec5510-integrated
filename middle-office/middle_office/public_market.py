@@ -29,6 +29,7 @@ ASSETS = {
     "LTC": ("Litecoin", ["莱特币"]),
     "USDT": ("Tether", ["泰达币"]),
     "USDC": ("USD Coin", []),
+    "MON": ("Monad", ["Monad"]),
 }
 USDT_PAIRS = tuple(f"{ticker}/USDT" for ticker in (
     "BTC ETH SOL XRP LINK AVAX ADA DOGE DOT LTC BCH UNI ATOM XLM SUI NEAR APT ETC HBAR TRX "
@@ -41,7 +42,7 @@ KRAKEN_PAIRS = {
 HK_PAIRS = ("BTC/USD", "ETH/USD", "SOL/USD", "BTC/HKD", "ETH/HKD", "LINK/USD", "USDT/USD", "USDT/HKD")
 _EXCHANGE_MARKETS = {
     "Binance": (*USDT_PAIRS, "FDUSD/USDT", "TUSD/USDT"),
-    "OKX": (*USDT_PAIRS, "TON/USDT", "PYUSD/USDT"),
+    "OKX": (*USDT_PAIRS, "TON/USDT", "PYUSD/USDT", "MON/USDT"),
     "Kraken": tuple(KRAKEN_PAIRS.values()),
     "HashKey": (*HK_PAIRS, "BTC/USDT", "ETH/USDT", "FDUSD/USD", "RLUSD/USD",
                 "AAVE/USD", "ARB/USD", "POL/USD", "OP/USD", "LTC/USD", "SUI/USD",
@@ -194,9 +195,9 @@ def _fetch(url):
 
 
 class PublicMarketFeed:
-    def __init__(self, office, *, interval=10, fetch=_fetch):
+    def __init__(self, office, *, interval=4, fetch=_fetch):
         self.office = office
-        self.interval = max(10, interval)
+        self.interval = max(4, interval)
         self.fetch = fetch
         self.stop_event = Event()
         self.lock = Lock()
@@ -249,7 +250,11 @@ class PublicMarketFeed:
                 failures += 1
             with self.lock:
                 self.status[name] = {**result, "checked_at": iso(datetime.now(timezone.utc))}
-            interval = SIMULATOR_INTERVAL if name == SIMULATOR_NAME else self.interval
+            interval = self.interval
+            if name == SIMULATOR_NAME:
+                interval = SIMULATOR_INTERVAL
+            elif name == "OSL":
+                interval = max(10, interval)
             delay = min(120, interval * 2 ** min(failures, 4))
             self.stop_event.wait(delay)
 

@@ -2,7 +2,7 @@
 
 默认服务前缀 `http://127.0.0.1:8200`。输入和输出均为 JSON。金额、价格、数量输出为十进制字符串，时间为 UTC RFC 3339。非 GET 请求使用 `Content-Type: application/json`，最大请求体 256 KiB。
 
-配置 `MO_API_TOKEN` 后，操作请求携带 `Authorization: Bearer <MO_API_TOKEN>`。AI 使用不同的 `MO_AI_READ_TOKEN`，只允许查询报价、账户快照和只读估值分析报告。业务后端负责根据登录会话映射 `user_id`，格式为 1–64 个 ASCII 字母、数字、下划线或连字符。
+配置 `MO_API_TOKEN` 后，操作请求携带 `Authorization: Bearer <MO_API_TOKEN>`。AI 使用不同的 `MO_AI_READ_TOKEN`，只允许查询报价、最近行情走势、账户快照和只读估值分析报告。业务后端负责根据登录会话映射 `user_id`，格式为 1–64 个 ASCII 字母、数字、下划线或连字符。
 
 | 方法及路径 | 作用 |
 | --- | --- |
@@ -13,6 +13,7 @@
 | POST `/api/quotes` | 批量接收行情并驱动挂单成交及风险监测 |
 | GET `/api/quotes?q=BTC%2FUSDT&limit=5` | AI 兼容的行情查询，一交易对返回一个估值来源 |
 | GET `/api/quotes?q=BTC&all_sources=true&limit=50` | 查询各来源报价及新鲜度 |
+| GET `/api/market/trends` | 最近 10 秒内所有可用交易对的同来源报价走势，允许 AI 只读凭证访问 |
 | GET `/api/comparison?symbol=BTC%2FUSDT&quantity=0.01&side=buy` | 同一交易对的多平台模拟成本比较 |
 | POST / GET `/api/accounts/{user_id}/orders` | 提交或查询订单，GET 可用 `?status=open` |
 | POST `/api/accounts/{user_id}/orders/{order_id}/cancel` | 撤销未成交订单，发送 `{}` |
@@ -92,6 +93,12 @@
 查询返回 `{ "quotes": [...] }`。未知查询返回空数组。AI 的查询按交易对合并来源，优先选新鲜报价，再选较新时间，最后用来源名称稳定排序。跨平台比较使用 `/api/comparison` 或 `all_sources=true`，保留各来源。
 
 公开模式返回 `market_mode: "public"` 和 `ranking_basis: "bid_ask_excluding_fees"`。`bid_size`、`ask_size` 是最优档基础币数量，`quantity_covered` 表示该档能否覆盖请求数量，`timestamp_source` 区分交易所字段和采集时间。费率为空时 `fee`、`total` 为空，`notional` 是未计费的报价金额。超过保鲜期的来源出现在 `excluded_sources`，尚无可用记录的出处出现在 `missing_sources`。
+
+### 最近行情走势
+
+`GET /api/market/trends` 使用服务端当前时间返回固定 10 秒窗口，顶层字段为 `as_of`、`start`、`window_seconds`、`status` 和 `rows`。`status` 为 `ok` 或 `empty`。每个可用交易对返回一行，同一行的所有价格均来自同一来源，优先选择有至少两个样本的来源，再按来源偏好和最新时间选择。最新样本须在报价保鲜期内，窗口包含两端并排除未来时间。
+
+行字段为 `symbol`、`quote_currency`、`source`、`quote_mode`、`status`、`sample_count`、`first_as_of`、`last_as_of`、`open`、`last`、`low`、`high` 和 `change_pct`。价格及变化百分比使用十进制字符串。行状态为 `trend` 或 `single_sample`，单样本的 `change_pct` 为 `null`。`quote_mode` 为 `simulation` 或 `public`。走势覆盖所有已接收且当前模式可见的交易对，内存观测从进程启动后积累，查询本身不生成新样本。
 
 ## 模拟订单
 

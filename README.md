@@ -23,34 +23,38 @@ python -X utf8 check_integration.py --live-market
 
 调试时可直接输入 `demo_c1`、`demo_c2`、`demo_c3`、`demo_c4` 或 `demo_c5` 登录，对应风险等级 C1 至 C5。五个账户预设了测评、USDT 余额和持仓。新建测试账户的交易历史为空，模拟订单成交后才写入。查看具体预设和验证步骤见[11 月 25 日 18 点版改动说明](改动说明-2026-11-25-18.md#测试账户与交易历史)。
 
-登录后，在聊天助手右上角打开「模型设置」。可选择本地 Ollama，或选择 DeepSeek、OpenAI、Gemini 并填入对应平台的 API Key。三个 API 默认使用 `deepseek-flash`、`gpt-4.1-mini`、`gemini-3.1-flash-lite`。Key 只保留在本次登录会话的服务端内存里，费用按实际发出的请求和所选平台规则计算。聊天会标注实际使用的模型或内置回复。涉及持仓或挂单的账户上下文只用于本机处理。
+账户统计页的「充值 USDT」会将输入金额计入当前账户的模拟可用余额。充值有独立回执，交易历史继续按模拟订单的成交记录显示。
 
-启动时也可用 `--ollama-model <本机已安装的模型>`，或在进程环境设置 `DEEPSEEK_API_KEY` 后加 `--enable-deepseek`。两种启动配置同时启用时，优先尝试 Ollama。未配置模型时使用内置回复。
+登录后，在聊天助手右上角打开「模型设置」。可选择本地 Ollama，或选择 DeepSeek、OpenAI、Gemini 并填入对应平台的 API Key。三个 API 默认使用 `deepseek-flash`、`gpt-4.1-mini`、`gemini-3.1-flash-lite`。Key 只保留在本次登录会话的服务端内存里，费用按实际发出的请求和所选平台规则计算。聊天会标注实际使用的模型、测评规则或具体调用状态。持仓上下文在本机处理。
 
-分别启动时，在 `middle-office/` 运行 `python -m middle_office --public-market`，在 `ai/` 运行 `python -m ai_mvp`，再运行 `python frontend/UI.py --integrated --no-browser`。服务从进程环境读取 [`.env.example`](.env.example) 列出的变量。`MO_AI_READ_TOKEN` 与 `MO_API_TOKEN` 取不同值，`AI_MVP_MARKET_TOKEN` 和 `AI_MVP_TRADING_TOKEN` 使用 `MO_AI_READ_TOKEN`。启用公开行情时为 AI 设置 `AI_MVP_MARKET_ALL_SOURCES=1` 和 `AI_MVP_QUOTE_MAX_AGE_SECONDS=45`。演示账户由中台在首次登录时创建，无需提前准备。
+启动时也可用 `--ollama-model <本机已安装的模型>`，或在进程环境设置 `DEEPSEEK_API_KEY` 后加 `--enable-deepseek`。两种启动配置同时启用时，优先尝试 Ollama。普通对话需要可用模型，测评和已核实的市场及账户信息仍可由后端提供。
+
+分别启动时，在 `ai/` 运行 `python -m ai_mvp.product_catalog` 导出产品规则 JSON，并运行 `python -m ai_mvp`。在 `middle-office/` 运行 `python -m middle_office --public-market --product-risks <规则文件路径> --suitability-advisory`，再从根目录运行 `python frontend/UI.py --integrated --no-browser`。服务从进程环境读取 [`.env.example`](.env.example) 列出的变量。`MO_AI_READ_TOKEN` 与 `MO_API_TOKEN` 取不同值，`AI_MVP_MARKET_TOKEN` 和 `AI_MVP_TRADING_TOKEN` 使用 `MO_AI_READ_TOKEN`。启用公开行情时为 AI 设置 `AI_MVP_MARKET_ALL_SOURCES=1` 和 `AI_MVP_QUOTE_MAX_AGE_SECONDS=45`。演示账户由中台在首次登录时创建，无需提前准备。
 
 ## 问卷与行情来源
 
-- 已完成问卷的账户可从结果页点击「重新测评」，提交后用最新结果预览订单。一键演示将 BTC/USDT、ETH/USDT、SOL/USDT 分别设为 R4、R3、R5。档位是课程演示参数。未测评或买入超过产品上限时，预览会提示风险，用户仍可自行确认。单独启动中台时，可组合 `--product-risks` 和 `--suitability-advisory` 启用同样的提醒。
+- 已完成问卷的账户可从结果页点击「重新测评」，提交后用最新结果预览订单。一键联调支持 13 个 USDT 模拟现货交易对。AI 后端用产品档位和五维门槛匹配候选，知识分较低的用户先学习稳定币的风险。买入预览提示未测评、超档或单项分数不足，用户仍可自行确认模拟订单。[五维匹配与每个币种的标签依据](ai/docs/asset-suitability.md)
 - 风险问卷采用原设计的 30 道计分题和五维权重。KE2 可以多选，按最高选项得分计。后端计算 RAI、财务承载力封顶、红旗封顶与 C/R 等级，原设计样例得到 RAI 61、C3、R3。首次答卷提交后，中台与 AI 保存派生结果，原始选项留在本次表单处理内。[问卷原仓库 `6171544`](https://github.com/1242388305pj-ux/pj_questiontest/tree/6171544562dad80f70584915db41c50d48938efd)
 - 测评结果页显示综合分、等级和产品上限，「查看对应投教」按当前画像加载一段短课。读完可点「打开模拟下单页」，选择买入或卖出并预览，再确认模拟订单。对应投教走本地规则，聊天助手仍接受自由提问。
 - 问卷置信度使用直选、答题耗时（调用方提供时）、选项变更和交叉校验。原文未给交叉校验数值阈值，演示以两项评分差至少 3 或高低档组合标记待复核，分数保持原公式。浏览器记录选项变更，不采集逐题耗时和可选背景信息。
 - `--live-market` 下，BTC 和 ETH 改用组员 `dev.zip` 中 `MDGatewaySimulator` 的 Python 移植版，每 2 秒生成一轮模拟买卖报价，不采用这两个币种的交易所报价。默认显示 BTC/USD 的 HashKey 与 OSL **模拟**报价。原模拟器提供 BTC/USD、BTC/USDT、BTC/HKD、ETH/USD；为保留模拟下单入口，ETH/USDT 沿用模拟 ETH/USD 的数值，按 1 USD = 1 USDT 的课堂假设，不使用真实汇率。BTC/HKD 只有一家模拟来源，ETH/HKD 未提供。已指定旧报价源的 BTC/ETH 挂单不会自动改用新源。
-- SOL 和其他币种继续使用原公开行情。比价页按相同计价币比较买卖一档，选择「所有」可按计价币分组展示当前币种支持的全部交易对。45 秒后旧报价退出比价。可查看 SOL/USD、LINK/USD、USDT/USD、USDT/HKD 等交易对。各来源状态见 `/api/health`。HashKey 使用公开 REST，OSL 使用公开 WebSocket；未安装可选客户端时 OSL 显示 `dependency_missing`。模拟下单仍使用 BTC/USDT、ETH/USDT 和 SOL/USDT。
+- SOL 和其他币种使用公开行情，MON/USDT 接入 OKX。比价页展示 BTC、ETH、SOL 三个资产组，模拟下单页单独列出 13 个可选币种。45 秒后旧报价退出比价。各来源状态见 `/api/health`。HashKey 使用公开 REST，OSL 使用公开 WebSocket，未安装可选客户端时 OSL 显示 `dependency_missing`。
 
 ## 已接通的 API
 
+- 浏览器 → AI：`GET /api/trading/products` 返回课堂币种目录，`GET /api/trading/suitability` 返回当前账户的匹配结果和理由。
 - 模拟下单价格图支持回看 1、5、10、15 分钟，默认 5 分钟。中台每 10 秒聚合一根报价 K 线，页面每 10 秒刷新图表。图表只显示中台启动后收到的报价，服务重启后重新积累。
 - 浏览器 → 中台：`GET /api/market/venues?symbol=BTC%2FUSDT&quantity=0.01&side=buy` 展示币种、计价币、价格、报价来源及时间。`GET /api/account/summary` 读取同一份中台账户快照，含余额、持仓和挂单。
 - 问卷结果 → 中台 → AI：`GET /api/questionnaire` 返回题库，`POST /api/questionnaire` 提交 `questionnaire_version`、`answers` 和 `consent`，按题库评分并同步。外部已评分系统仍可用 `PUT /api/profile` 导入派生结果。`GET /api/profile` 返回 AI 画像。AI 暂时不可用时，下次读画像或聊天会重新同步中台已保存的结果。
-- 浏览器 → AI → 中台：`POST /api/assistant/chat` 支持多来源买卖报价、持仓与挂单。`GET /api/risk` 输出 AI 风险统计。公开模式可在聊天里输入「比较 BTC/USDT 的报价」。
+- 浏览器 → AI → 中台：`POST /api/assistant/chat` 支持多来源买卖报价和持仓适配分析。`GET /api/risk` 输出 AI 风险统计。公开模式可在聊天里输入「比较 BTC/USDT 的报价」。
+- 模型生成回复时，AI 读取当前有报价的所有交易对在过去 10 秒的观测。同一交易对使用一个报价来源，区分公开和模拟行情。只有一个样本时标记为样本不足。
 - 浏览器 → 中台预览与模拟下单：`POST /api/orders/preview` 返回估算与有效期 60 秒的 `preview_id`。`POST /api/orders` 用 `{"preview_id":"..."}` 确认，中台在写账时复核。有效期内重交同一 ID 返回同一订单。`GET /api/orders/{order_id}` 查询状态，`POST /api/orders/{order_id}/cancel` 撤销挂单。
 
 ## 联调边界
 
 - 模拟账户只供本机访问。仅凭名称选择账户，不验证身份；知道名称的人可以进入同一演示账户。请勿使用真实凭证或敏感数据。
 - 公开行情展示买卖一档及数量，报价排名未纳入账户交易费、完整订单簿或滑点。数量大于一档挂单时标记深度不足。演示账本用公开报价模拟成交时将未知手续费按零处理，并在预览提示。
-- AI 与前端都能看到多来源报价。持仓估值仍以新鲜参考价为基础，AI 风险统计与中台账本估值使用各自快照。历史走势、报表导出、资金划转和自选管理仍是原型功能。
-- HTTP 联调覆盖内置回复、三模块数据流和模拟的 DeepSeek、OpenAI、Gemini 请求。真实模型生成需要本机 Ollama 或所选平台的有效 Key。
+- AI 与前端都能看到多来源报价。持仓估值仍以新鲜参考价为基础，AI 风险统计与中台账本估值使用各自快照。
+- HTTP 联调覆盖模拟充值、三模块数据流和 DeepSeek、OpenAI、Gemini 的模拟请求及鉴权失败。真实模型生成需要本机 Ollama 或所选平台的有效 Key。
 
 协作约定见 [CLAUDE.md](CLAUDE.md)。

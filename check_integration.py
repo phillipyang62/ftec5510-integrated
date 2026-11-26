@@ -1,6 +1,7 @@
 """Exercise the questionnaire, frontend gateway, ledger, and AI over HTTP."""
 
 import argparse
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from importlib.util import find_spec
 from http.cookiejar import CookieJar
@@ -108,7 +109,7 @@ def check_account_switch(ui, url):
         "user_id": USER, "message": "查看我的持仓和挂单", "include_account": True,
     })
     assert second_chat["account"]["state"] == "ok"
-    assert {"symbol": "BTC", "quantity": "0.1"} in second_chat["account"]["positions"]
+    assert {"symbol": "BTC/USDT", "quantity": "0.1"} in second_chat["account"]["positions"]
     checked(ui, "POST", "/api/session", {"account_name": USER})
     assert checked(ui, "GET", "/api/orders")["orders"] == first_orders
     assert checked(ui, "GET", "/api/account/summary")["portfolio"]["balances"] == first_ledger["portfolio"]["balances"]
@@ -155,7 +156,8 @@ def check_session_models(url):
             assert checked(first, "GET", settings_path)["settings"] == selected
             assert checked(second, "GET", settings_path)["settings"] == default
             ignored_override = checked(second, "POST", "/api/assistant/chat", {**question, "model_settings": settings})
-            assert ignored_override["generation"] == "template"
+            assert ignored_override["generation"] == "model_not_configured"
+            assert ignored_override["model_status"]["code"] == "not_configured"
             connect.assert_not_called()
 
             reply = checked(first, "POST", "/api/assistant/chat", question)
@@ -180,11 +182,88 @@ def check_session_models(url):
                     assert body["thinking"] == {"type": "disabled"}
 
             reply = checked(first, "POST", "/api/assistant/chat", {**question, "include_account": True})
-            assert reply["generation"] == "template"
+            assert reply["generation"] == "model_privacy_blocked" and reply["account"]["state"] == "ok"
             connect.assert_called_once()
+
+            response.status = 401
+            response.read.return_value = json.dumps({"error": {"message": f"Invalid key {key}"}}).encode()
+            reply = checked(first, "POST", "/api/assistant/chat", question)
+            assert reply["generation"] == "model_unavailable"
+            assert reply["model_status"]["code"] == "authentication_failed"
+            assert reply["model_status"]["provider"] == provider and reply["model_status"]["http_status"] == 401
+            assert key not in json.dumps(reply)
     checked(first, "DELETE", "/api/session")
     checked(first, "POST", "/api/session", {"account_name": "student_models"})
     assert checked(first, "GET", settings_path)["settings"] == default
+
+
+def check_deposits(url):
+    path = "/api/account/deposits"
+    client, other = BrowserClient(url), BrowserClient(url)
+    payload = {"amount": "123.45678912", "request_id": "deposit-retry-1"}
+    checked(client, "POST", path, payload, expected=401)
+    checked(client, "POST", "/api/session", {"account_name": "student_deposits"})
+    checked(other, "POST", "/api/session", {"account_name": "student_deposits_other"})
+    summary_path = "/api/account/summary"
+    before = checked(client, "GET", summary_path)
+    other_before = checked(other, "GET", summary_path)
+    trades_path = "/api/account/transactions"
+    trades_before = checked(client, "GET", trades_path)
+
+    receipt = checked(client, "POST", path, payload)
+    assert receipt["mode"] == "simulation" and receipt["currency"] == "USDT" and receipt["amount"] == payload["amount"]
+    assert checked(client, "POST", path, payload) == receipt
+    assert checked(client, "POST", path, {**payload, "amount": "99"}, expected=409)["error"]["code"] == "request_conflict"
+    assert checked(client, "POST", path, {**payload, "amount": "0"}, expected=400)["error"]["code"] == "invalid_number"
+    after = checked(client, "GET", summary_path)
+    before_balance = next(row for row in before["portfolio"]["balances"] if row["currency"] == "USDT")
+    after_balance = next(row for row in after["portfolio"]["balances"] if row["currency"] == "USDT")
+    assert Decimal(after_balance["available"]) - Decimal(before_balance["available"]) == Decimal(payload["amount"])
+    assert after_balance["available"] == receipt["available"]
+    assert after["account"]["open_orders"] == before["account"]["open_orders"]
+    assert checked(client, "GET", trades_path) == trades_before
+    assert checked(other, "GET", summary_path)["portfolio"]["balances"] == other_before["portfolio"]["balances"]
+
+
+def check_recent_market_context(url, middle, reader):
+    now = datetime.now(timezone.utc)
+    observations = [
+        ("CONTEXT/USD", "demo:Fixture", 5, "2"),
+        ("CONTEXT/USD", "demo:Fixture", 1, "3"),
+        ("RECENT/USDT", "PublicFixture", 2, "8"),
+        ("EXPIRED/USD", "demo:Fixture", 12, "7"),
+    ]
+    checked(middle, "POST", "/api/quotes", {"quotes": [
+        {"symbol": symbol, "source": source, "as_of": (now - timedelta(seconds=age)).isoformat(), "price": price}
+        for symbol, source, age, price in observations
+    ]})
+    snapshot = checked(reader, "GET", "/api/market/trends")
+    assert snapshot["status"] == "ok" and snapshot["window_seconds"] == 10
+    snapshots = {row["symbol"]: row for row in snapshot["rows"]}
+    assert snapshots["CONTEXT/USD"]["sample_count"] == 2 and snapshots["CONTEXT/USD"]["change_pct"] == "50"
+    assert snapshots["RECENT/USDT"]["status"] == "single_sample" and "EXPIRED/USD" not in snapshots
+
+    client = BrowserClient(url)
+    checked(client, "POST", "/api/session", {"account_name": "student_market_context"})
+    with patch("ai_mvp.models.HTTPSConnection") as connect:
+        provider = connect.return_value.getresponse.return_value
+        provider.status = 200
+        provider.read.return_value = b'{"choices":[{"message":{"content":"A limit order sets a price boundary."},"finish_reason":"stop"}]}'
+        checked(client, "PUT", "/api/model-settings", {
+            "provider": "deepseek", "api_key": "fixture-market-context", "allow_billing": True,
+        })
+        answer = checked(client, "POST", "/api/assistant/chat", {"message": "What is a limit order?"})
+        assert answer["generation"] == "remote_model"
+        sent = json.loads(connect.return_value.request.call_args.kwargs["body"])
+        prompt = json.loads(sent["messages"][0]["content"].split("\n本轮上下文\n", 1)[1])
+    assert prompt["market_requested"] is False
+    trends = prompt["market_trends"]
+    assert trends["status"] == "ok" and trends["window_seconds"] == 10
+    rows = {row[0]: dict(zip(trends["columns"], row)) for row in trends["rows"]}
+    observed = rows["CONTEXT/USD"]
+    assert observed["quote_mode"] == "simulation" and observed["sample_count"] == 2 and observed["direction"] == "up"
+    assert rows["RECENT/USDT"]["direction"] is None and rows["RECENT/USDT"]["quote_mode"] == "public"
+    assert "EXPIRED/USD" not in rows
 
 
 def questionnaire_form(ui, middle, ai):
@@ -231,7 +310,7 @@ def derived_profile_api(ui, middle, ai):
     checked(middle, "PUT", f"/api/accounts/{USER}/assessment", beginner)
     assert checked(ui, "GET", "/api/education")["focus"]["score"] == 30
     education = checked(ui, "POST", "/api/assistant/chat", {"message": "什么是滑点？"})
-    assert education["mode"] == "education" and education["reply"]
+    assert education["mode"] == "education" and education["generation"] == "model_not_configured"
 
     profile = {**ASSESSMENT, "assessment": {**ASSESSMENT["assessment"], "rai": 66, "risk_level": "C4", "product_cap": "R4"}}
     result = checked(ui, "PUT", "/api/profile", profile)
@@ -264,7 +343,14 @@ def check_suitability_warnings(url):
     within_cap = checked(ui, "POST", "/api/orders/preview", {**buy, "symbol": "ETH/USDT"})
     assert "suitability_warning" not in within_cap
 
-    revised = {**ASSESSMENT, "assessment": {**ASSESSMENT["assessment"], "rai": 66, "risk_level": "C4", "product_cap": "R4"}}
+    revised = {**ASSESSMENT, "assessment": {
+        **ASSESSMENT["assessment"], "rai": 66, "risk_level": "C4", "product_cap": "R4",
+        "dimensions": {"FC": 55, "RA": 65, "KE": 75, "BD": 60, "OC": 60},
+    }}
+    checked(ui, "PUT", "/api/profile", revised)
+    warning = checked(ui, "POST", "/api/orders/preview", buy)["suitability_warning"]
+    assert warning["code"] == "profile_dimensions" and warning["unmet_dimensions"] == ["FC"]
+    revised["assessment"]["dimensions"] = {**revised["assessment"]["dimensions"], "FC": 70}
     checked(ui, "PUT", "/api/profile", revised)
     assert "suitability_warning" not in checked(ui, "POST", "/api/orders/preview", buy)
 
@@ -334,6 +420,94 @@ def check_preset_accounts(url):
     assert checked(ui, "GET", history_path) == empty_history
 
 
+def check_asset_matching_and_orders(url):
+    ui = BrowserClient(url)
+    checked(ui, "POST", "/api/session", {"account_name": "demo_c1"})
+    catalog = checked(ui, "GET", "/api/trading/products")
+    expected = {"BTC", "ETH", "SOL", "USDC", "RLUSD", "XRP", "ADA", "LINK", "AVAX", "SUI", "DOGE", "PEPE", "MON"}
+    assert catalog["policy"] == "classroom-v2"
+    thresholds = {"0": 0, "1": 30, "2": 45, "3": 60, "4": 85}
+    assert catalog["level_thresholds"] == thresholds
+    symbols = {f"{ticker}/USDT" for ticker in expected}
+    assert {row["symbol"] for row in catalog["products"]} == symbols
+    dimension_codes = ("FC", "RA", "KE", "BD", "OC")
+    rating_matrix = {
+        "USDC": (0, 0, 0, 0, 2), "RLUSD": (0, 0, 0, 0, 3),
+        "ETH": (2, 1, 2, 3, 2), "BTC": (3, 2, 3, 3, 3),
+        "SOL": (2, 4, 4, 4, 4), "XRP": (2, 4, 4, 4, 4), "ADA": (2, 4, 4, 4, 4),
+        "LINK": (2, 4, 4, 4, 4), "AVAX": (2, 4, 4, 4, 4),
+        "SUI": (3, 4, 4, 4, 4), "MON": (3, 4, 4, 4, 4),
+        "DOGE": (4, 4, 4, 4, 4), "PEPE": (4, 4, 4, 4, 4),
+    }
+    for product in catalog["products"]:
+        ratings = dict(zip(dimension_codes, rating_matrix[product["symbol"].split("/")[0]]))
+        assert product["requirement_levels"] == ratings
+        assert product["requirements"] == {code: thresholds[str(level)] for code, level in ratings.items()}
+    match = checked(ui, "GET", "/api/trading/suitability")
+    lesson = checked(ui, "GET", "/api/education")
+    assert match["policy"] == "classroom-v2" and match["level_thresholds"] == thresholds
+    assert match["route"] == "education" and not match["recommendations"]
+    assert {row["symbol"] for row in lesson["asset_examples"]} == {"USDC/USDT", "RLUSD/USDT"}
+    assert all(lesson["content"][language] for language in ("zh", "en"))
+    for example in lesson["asset_examples"]:
+        assert example["unmet"] == ["OC"] and "OC" in example["reasons"]["zh"]
+        assert any("脱锚风险" in tag for tag in example["tags"]["zh"])
+        assert example["basis"]["zh"] and example["sources"]
+    stablecoin = checked(ui, "POST", "/api/orders/preview", {
+        "symbol": "USDC/USDT", "side": "buy", "order_type": "market", "quantity": "0.01",
+    })
+    assert stablecoin["suitability_warning"] == {
+        "code": "profile_dimensions", "risk_level": "C1", "product_cap": "R1",
+        "product_risk": "R1", "unmet_dimensions": ["OC"],
+    }
+    assert Decimal(stablecoin["notional"]) > 0 and stablecoin["preview_id"]
+    chat = checked(ui, "POST", "/api/assistant/chat", {"message": "哪些币种适合我？"})
+    assert chat["generation"] == "rule_based" and not chat["asset_guidance"]["recommendations"]
+    assert "USDC/USDT" in chat["reply"] and "脱锚" in chat["reply"] and "OC" in chat["reply"]
+
+    checked(ui, "POST", "/api/session", {"account_name": "demo_c3"})
+    match = checked(ui, "GET", "/api/trading/suitability")
+    assert set(match["recommendations"]) == {"USDC/USDT", "RLUSD/USDT", "ETH/USDT"}
+    eth = next(row for row in match["products"] if row["symbol"] == "ETH/USDT")
+    assert eth["status"] == "suitable" and eth["unmet"] == []
+
+    checked(ui, "POST", "/api/session", {"account_name": "student_asset_catalog"})
+    dimensions = {"FC": 95, "RA": 95, "KE": 95, "BD": 50, "OC": 95}
+    assessment = {"assessment": {"dimensions": dimensions, "rai": 90, "risk_level": "C5", "product_cap": "R5"}}
+    checked(ui, "PUT", "/api/profile", assessment)
+    match = checked(ui, "GET", "/api/trading/suitability")
+    pepe = next(row for row in match["products"] if row["symbol"] == "PEPE/USDT")
+    assert pepe["status"] == "caution" and pepe["unmet"] == ["BD"]
+    assert "PEPE/USDT" not in match["recommendations"]
+    preview = checked(ui, "POST", "/api/orders/preview", {
+        "symbol": "PEPE/USDT", "side": "buy", "order_type": "market", "quantity": "0.01",
+    })
+    assert preview["suitability_warning"] == {
+        "code": "profile_dimensions", "risk_level": "C5", "product_cap": "R5",
+        "product_risk": "R5", "unmet_dimensions": ["BD"],
+    }
+    dimensions["BD"] = 95
+    checked(ui, "PUT", "/api/profile", assessment)
+    assert set(checked(ui, "GET", "/api/trading/suitability")["recommendations"]) == symbols
+    for symbol in sorted(symbols):
+        order = {"symbol": symbol, "side": "buy", "order_type": "market", "quantity": "0.01"}
+        preview = checked(ui, "POST", "/api/orders/preview", order)
+        assert Decimal(preview["notional"]) > 0 and "suitability_warning" not in preview
+        fill = checked(ui, "POST", "/api/orders", {"preview_id": preview["preview_id"]})
+        assert fill["status"] == "filled" and fill["symbol"] == symbol
+        chart = checked(ui, "GET", "/api/market/history?" + urlencode({"symbol": symbol, "minutes": 1}))
+        assert chart["symbol"] == symbol and chart["candles"]
+    assert checked(ui, "GET", "/api/account/transactions")["total"] == len(symbols)
+    dimensions["BD"] = 50
+    checked(ui, "PUT", "/api/profile", assessment)
+    holdings = checked(ui, "POST", "/api/assistant/chat", {"message": "分析我的持仓风险"})
+    pepe = next(row for row in holdings["holdings_comparison"] if row["symbol"] == "PEPE/USDT")
+    assert pepe["product_grade"] == "R5" and not pepe["above_cap"]
+    assert pepe["unmet_dimensions"] == [{"code": "BD", "score": 50, "minimum": 85}]
+    assert "行为纪律 50 分" in holdings["reply"] and "暂停规则" in holdings["reply"]
+    assert all("/" in row["symbol"] for row in holdings["account"]["positions"])
+
+
 def offline_checks():
     with demo_stack(ui_port=0) as (middle, ai, reader, url):
         ui = BrowserClient(url)
@@ -344,14 +518,26 @@ def offline_checks():
         print("PASS frontend assets, loopback origin, and both backend health checks")
 
         check_sign_in(ui)
-        assert checked(ui, "GET", "/api/market/catalog") == {"market_mode": "simulation", "pairs": {}}
+        catalog = checked(ui, "GET", "/api/market/catalog")
+        assert catalog["market_mode"] == "simulation" and len(catalog["pairs"]) == 13
+        for symbol in ("BTC/USDT", "ETH/USDT", "SOL/USDT"):
+            assert catalog["pairs"][symbol] == ["demo:HashKey", "demo:OSL"]
         print("PASS account-name sign-in, session cookie, and anonymous access check")
+
+        check_asset_matching_and_orders(url)
+        print("PASS data-driven asset learning, five-dimensional matching, and 13 simulated orders plus charts")
 
         check_preset_accounts(url)
         print("PASS five preset assessments, starting holdings, and histories populated only by fills")
 
+        check_deposits(url)
+        print("PASS simulated USDT top-ups, exact balance, session isolation, idempotency and unchanged history")
+
         check_session_models(url)
         print("PASS mocked DeepSeek, OpenAI and Gemini calls, consent, provider key isolation and account privacy")
+
+        check_recent_market_context(url, middle, reader)
+        print("PASS ten-second market observations reach the assistant across the read-only middle-office API")
 
         questionnaire_form(ui, middle, ai)
         print("PASS questionnaire, example RAI 61/C3/R3, risk caps and profile-based education")
@@ -382,18 +568,16 @@ def offline_checks():
         print("PASS read-only preview, insufficient funds, simulated fill, duplicate submit, pending order")
 
         chat = checked(ui, "POST", "/api/assistant/chat", {
-            "user_id": "untrusted_browser_id", "message": "查一下比特币报价、我的持仓和挂单",
+            "user_id": "untrusted_browser_id", "message": "查一下比特币报价和我的持仓",
             "include_account": True, "market_queries": ["BTC/USDT"],
         })
         assert chat["reply"] and "模拟报价" in chat["reply"]
-        assert chat["generation"] == "template" and chat["mode"] == "advisory" and chat["product_cap"] == "R4"
+        assert chat["generation"] == "rule_based" and chat["mode"] == "advisory" and chat["product_cap"] == "R4"
         assert chat["market"][0]["status"] == "exact" and chat["market"][0]["matches"][0]["freshness"] == "fresh"
         assert chat["account"]["state"] == "ok"
-        assert {"symbol": "BTC", "quantity": "0.11"} in chat["account"]["positions"]
-        assert chat["account"]["open_orders"][0]["side"] == "sell"
-        assert chat["account"]["open_orders"][0]["quantity"] == "0.005"
-        assert "BTC/USDT 卖出 0.005" in chat["reply"]
-        print("PASS chat uses confirmed profile, exact quote, holdings, and open order")
+        assert {"symbol": "BTC/USDT", "quantity": "0.11"} in chat["account"]["positions"]
+        assert "open_orders" not in chat["account"] and "0.005" not in chat["reply"]
+        print("PASS chat uses confirmed profile, exact quote, holdings and five-dimensional gaps")
 
         risk = checked(ui, "GET", "/api/risk?quote_currency=USDT")
         ledger = checked(ui, "GET", "/api/account/summary")

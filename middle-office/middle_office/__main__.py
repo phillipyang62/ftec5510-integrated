@@ -3,6 +3,7 @@ import json
 import os
 
 from .market import MarketFeed
+from .price_history import CHART_PAIRS
 from .public_market import PROVIDER_MARKETS, QUOTE_MAX_AGE, PublicMarketFeed
 from .service import MiddleOffice
 from .server import Server
@@ -17,20 +18,25 @@ def main():
     parser.add_argument("--market-url", default=os.getenv("MO_MARKET_URL"), help="upstream quote URL returning {quotes:[...]}")
     parser.add_argument("--market-interval", type=int, default=5)
     parser.add_argument("--public-market", action="store_true", help="collect public exchange spot quotes")
-    parser.add_argument("--product-risks", help='JSON file mapping pairs to agreed demo risk levels, e.g. {"BTC/USDT": 5}')
+    parser.add_argument("--product-risks", help="JSON mapping pairs to risk grades or to grade and requirements")
     parser.add_argument("--suitability-advisory", action="store_true", help="report assessment warnings on simulated buys")
     args = parser.parse_args()
-    risks = {}
+    policy = {}
     if args.product_risks:
-        with open(args.product_risks, encoding="utf-8") as file:
-            risks = json.load(file)
+        with open(args.product_risks, encoding="utf-8-sig") as file:
+            policy = json.load(file)
+    if not isinstance(policy, dict):
+        parser.error("--product-risks must contain a JSON object")
+    risks = {symbol: entry.get("grade") if isinstance(entry, dict) else entry for symbol, entry in policy.items()}
+    requirements = {symbol: entry.get("requirements", {}) for symbol, entry in policy.items() if isinstance(entry, dict)}
     if args.public_market and args.market_url:
         parser.error("choose --public-market or a custom market URL")
     database = args.db or (".middle_office/public-ledger.sqlite3" if args.public_market else ".middle_office/ledger.sqlite3")
     quote_age = args.quote_max_age if args.quote_max_age is not None else (QUOTE_MAX_AGE if args.public_market else 120)
     sources = PROVIDER_MARKETS if args.public_market else {}
     office = MiddleOffice(database, max_quote_age=quote_age, product_risks=risks, public_sources=sources,
-                          public_source_pairs=sources,
+                          public_source_pairs=sources, product_requirements=requirements,
+                          chart_pairs=CHART_PAIRS | requirements.keys(),
                           suitability_advisory=args.suitability_advisory)
     server = Server((args.host, args.port), office, token=os.getenv("MO_API_TOKEN"), read_token=os.getenv("MO_AI_READ_TOKEN"))
     feed = None

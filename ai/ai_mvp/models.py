@@ -3,6 +3,7 @@
 import json
 import os
 import re
+import ssl
 from http.client import HTTPConnection, HTTPException, HTTPSConnection
 from urllib.parse import urlsplit
 
@@ -23,16 +24,64 @@ _REMOTE_PROVIDERS = {
 _CHAT_COMPLETIONS = "/v1/chat/completions"
 _MAX_RESPONSE_BYTES = 1_000_000
 _CLOUD_MODEL = re.compile(r"(?:-|:)cloud(?::[^/]*)?$", re.IGNORECASE)
+_MODEL_ERRORS = {
+    "authentication_failed": ("平台身份验证失败，请在模型设置重新填写对应平台的 API Key。", "Authentication failed. Enter the API key for the selected provider in model settings."),
+    "balance_exhausted": ("平台返回余额不足，请检查该平台账户的余额和计费状态。", "The provider reported insufficient balance. Check the account balance and billing status."),
+    "permission_denied": ("平台拒绝访问，请检查账户权限、地区支持和项目限制。", "Access was denied. Check account permissions, regional availability and project restrictions."),
+    "model_not_found": ("平台未找到所选模型，请检查模型名称和账户的模型访问权限。", "The selected model was not found. Check its name and your account's model access."),
+    "rate_limited": ("平台限制了请求频率或额度，请检查平台配额并稍后重试。", "The provider limited the request rate or quota. Check the provider quota and try again later."),
+    "request_rejected": ("平台拒绝了请求参数，请检查模型配置和 API 兼容性。", "The provider rejected the request parameters. Check the model configuration and API compatibility."),
+    "timeout": ("模型请求超时，请检查网络连接，或缩短问题后重试。", "The model request timed out. Check the connection or try a shorter question."),
+    "network_error": ("无法连接模型平台，请检查服务端网络、DNS 和连接配置。", "Cannot connect to the model provider. Check server networking, DNS and connection settings."),
+    "tls_error": ("模型平台的 TLS 证书验证失败，请检查服务端证书与网络配置。", "TLS verification failed. Check server certificates and network configuration."),
+    "provider_unavailable": ("模型服务暂不可用，请稍后重试或在模型设置切换服务。", "The model service is unavailable. Try again later or select another provider in model settings."),
+    "invalid_response": ("模型平台返回了不兼容的数据，请检查 API 配置。", "The provider returned incompatible data. Check the API configuration."),
+    "empty_response": ("模型未返回可显示的回答，请调整问题或更换模型后重试。", "The model returned no displayable answer. Adjust the question or select another model."),
+    "output_truncated": ("模型回答达到输出上限，请缩短问题后重试。", "The answer reached the output limit. Try a shorter question."),
+    "provider_policy": ("模型平台限制了这次回答，请调整问题。", "The provider restricted this response. Rephrase the question."),
+    "response_too_large": ("模型平台返回的数据超过大小限制，请缩短问题后重试。", "The provider response exceeded the size limit. Try a shorter question."),
+    "local_model_missing": ("本地未安装所选模型，请在模型设置选择已安装的 Ollama 模型。", "The selected local model is not installed. Select an installed Ollama model in model settings."),
+}
 
 
 class ModelUnavailable(RuntimeError):
-    """The caller can use its offline response path."""
+    """Carry a sanitized failure category without disclosing provider response bodies."""
+
+    def __init__(self, message, *, code="provider_unavailable", http_status=None, retryable=False):
+        super().__init__(message)
+        self.code = code if code in _MODEL_ERRORS else "provider_unavailable"
+        self.http_status = http_status
+        self.retryable = retryable
+
+    def as_dict(self):
+        zh, en = _MODEL_ERRORS[self.code]
+        status = {"state": "unavailable", "code": self.code, "retryable": self.retryable,
+                  "message": {"zh": zh, "en": en}}
+        if self.http_status is not None:
+            status["http_status"] = self.http_status
+        return status
 
 
 def _with_default_tag(name: str) -> str:
     if ":" in name.rsplit("/", 1)[-1]:
         return name
     return f"{name}:latest"
+
+
+def _gemini_auth_error(response):
+    try:
+        raw = response.read(16_385)
+        if len(raw) > 16_384:
+            return False
+        payload = json.loads(raw)
+    except (OSError, HTTPException, ValueError, RecursionError):
+        return False
+    error = payload.get("error") if isinstance(payload, dict) else None
+    details = error.get("details", []) if isinstance(error, dict) else []
+    return isinstance(details, list) and any(
+        isinstance(detail, dict) and detail.get("reason") in {"API_KEY_INVALID", "API_KEY_EXPIRED", "CREDENTIALS_MISSING"}
+        for detail in details
+    )
 
 
 def _request_json(
@@ -55,21 +104,32 @@ def _request_json(
         connection.request(method, path, body=body, headers=headers)
         response = connection.getresponse()
         if response.status != 200:
-            raise ModelUnavailable(f"{source} returned HTTP {response.status}")
+            code = {400: "request_rejected", 401: "authentication_failed", 402: "balance_exhausted",
+                    403: "permission_denied", 404: "model_not_found", 408: "timeout",
+                    413: "request_rejected", 422: "request_rejected", 429: "rate_limited"}.get(
+                        response.status, "provider_unavailable")
+            if source == "Gemini" and response.status == 400 and _gemini_auth_error(response):
+                code = "authentication_failed"
+            raise ModelUnavailable(f"{source} returned HTTP {response.status}", code=code,
+                                   http_status=response.status, retryable=response.status in {408, 429} or response.status >= 500)
         raw = response.read(_MAX_RESPONSE_BYTES + 1)
+    except ssl.SSLCertVerificationError:
+        raise ModelUnavailable(f"Cannot verify {source}", code="tls_error") from None
+    except TimeoutError:
+        raise ModelUnavailable(f"Timed out reading {source}", code="timeout", retryable=True) from None
     except (OSError, HTTPException, ValueError):
-        raise ModelUnavailable(f"Cannot read from {source}") from None
+        raise ModelUnavailable(f"Cannot read from {source}", code="network_error", retryable=True) from None
     finally:
         connection.close()
 
     if len(raw) > _MAX_RESPONSE_BYTES:
-        raise ModelUnavailable(f"{source} response exceeds the size limit")
+        raise ModelUnavailable(f"{source} response exceeds the size limit", code="response_too_large")
     try:
         result = json.loads(raw)
     except (ValueError, RecursionError):
-        raise ModelUnavailable(f"{source} returned invalid JSON") from None
+        raise ModelUnavailable(f"{source} returned invalid JSON", code="invalid_response") from None
     if not isinstance(result, dict):
-        raise ModelUnavailable(f"{source} returned an invalid response")
+        raise ModelUnavailable(f"{source} returned an invalid response", code="invalid_response")
     return result
 
 
@@ -81,6 +141,8 @@ def _messages(system: str, user: str) -> list[dict[str, str]]:
 
 
 class OllamaModel:
+    provider = "ollama"
+
     def __init__(self, model: str, url: str = _DEFAULT_URL, timeout: float = _DEFAULT_TIMEOUT):
         endpoint = urlsplit(url)
         if (
@@ -112,7 +174,7 @@ class OllamaModel:
     def installed_models(self) -> list[str]:
         tags = self._request("GET", "/api/tags").get("models")
         if not isinstance(tags, list):
-            raise ModelUnavailable("Ollama returned an invalid model list")
+            raise ModelUnavailable("Ollama returned an invalid model list", code="invalid_response")
         names = set()
         for entry in tags:
             if not isinstance(entry, dict) or entry.get("remote_host") or entry.get("remote_model"):
@@ -125,7 +187,7 @@ class OllamaModel:
     def generate(self, system: str, user: str) -> str:
         # Check aliases before sending a prompt, since they may point to a remote model.
         if self.model not in self.installed_models():
-            raise ModelUnavailable("The configured model is not installed locally")
+            raise ModelUnavailable("The configured model is not installed locally", code="local_model_missing")
 
         result = self._request(
             "POST",
@@ -143,9 +205,9 @@ class OllamaModel:
         if isinstance(content, str):
             content = content.rsplit("</think>", 1)[-1].strip()
         if not isinstance(content, str) or not content or "<think>" in content:
-            raise ModelUnavailable("The local model returned no final answer")
+            raise ModelUnavailable("The local model returned no final answer", code="empty_response")
         if result.get("done") is not True or result.get("done_reason") == "length":
-            raise ModelUnavailable("The local model did not finish its reply")
+            raise ModelUnavailable("The local model did not finish its reply", code="output_truncated")
         return content
 
 
@@ -157,8 +219,10 @@ def _validate_remote_config(api_key: str, timeout: float) -> None:
 
 
 def _remote_text(content, api_key: str) -> str:
-    if not isinstance(content, str) or not content.strip() or api_key in content:
-        raise ModelUnavailable("The remote model returned no final answer")
+    if not isinstance(content, str) or not content.strip():
+        raise ModelUnavailable("The remote model returned no final answer", code="empty_response")
+    if api_key in content:
+        raise ModelUnavailable("The remote model returned no final answer", code="invalid_response")
     return content.strip()
 
 
@@ -188,6 +252,7 @@ class OpenAICompatibleModel:
         self.model = model
         self.timeout = timeout
         self._api_key = api_key
+        self.provider = {_OPENAI_HOST: "openai", _DEEPSEEK_HOST: "deepseek"}.get(self.host, "custom")
 
     def generate(self, system: str, user: str) -> str:
         # HTTPSConnection verifies TLS and sends only one request to the configured host.
@@ -213,16 +278,18 @@ class OpenAICompatibleModel:
         )
         choices = result.get("choices")
         if not isinstance(choices, list) or not choices or not isinstance(choices[0], dict):
-            raise ModelUnavailable("The remote model returned no final answer")
+            raise ModelUnavailable("The remote model returned no final answer", code="invalid_response")
         choice = choices[0]
         message = choice.get("message")
         content = message.get("content") if isinstance(message, dict) else None
         if choice.get("finish_reason") not in (None, "stop"):
-            raise ModelUnavailable("The remote model returned no final answer")
+            code = "output_truncated" if choice.get("finish_reason") == "length" else "provider_policy"
+            raise ModelUnavailable("The remote model returned no final answer", code=code)
         return _remote_text(content, self._api_key)
 
 
 class GeminiModel:
+    provider = "gemini"
     model = _REMOTE_PROVIDERS["gemini"]["model"]
 
     def __init__(self, api_key: str, timeout: float = _REMOTE_TIMEOUT):
@@ -246,12 +313,15 @@ class GeminiModel:
         )
         candidates = result.get("candidates")
         if not isinstance(candidates, list) or not candidates or not isinstance(candidates[0], dict):
-            raise ModelUnavailable("The remote model returned no final answer")
+            feedback = result.get("promptFeedback")
+            code = "provider_policy" if isinstance(feedback, dict) and feedback.get("blockReason") else "invalid_response"
+            raise ModelUnavailable("The remote model returned no final answer", code=code)
         candidate = candidates[0]
         content = candidate.get("content")
         parts = content.get("parts") if isinstance(content, dict) else None
         if candidate.get("finishReason") != "STOP" or not isinstance(parts, list):
-            raise ModelUnavailable("The remote model returned no final answer")
+            code = "output_truncated" if candidate.get("finishReason") == "MAX_TOKENS" else "provider_policy"
+            raise ModelUnavailable("The remote model returned no final answer", code=code)
         answer = "".join(part["text"] for part in parts
                          if isinstance(part, dict) and not part.get("thought") and isinstance(part.get("text"), str))
         return _remote_text(answer, self._api_key)

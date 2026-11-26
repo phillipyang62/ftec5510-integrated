@@ -5,7 +5,7 @@ import unittest
 
 from middle_office.public_market import PROVIDER_MARKETS
 from middle_office.service import MiddleOffice
-from middle_office.validation import iso
+from middle_office.validation import BusinessError, iso
 
 
 class PriceHistoryTests(unittest.TestCase):
@@ -60,3 +60,18 @@ class PriceHistoryTests(unittest.TestCase):
         self.assertEqual(self.office.price_chart("ETH/USDT", "5")["status"], "stale")
         self.now += timedelta(minutes=15)
         self.assertEqual(self.office.price_chart("ETH/USDT", "15")["candles"], [])
+
+    def test_configured_extra_pairs_record_history_without_widening_default_support(self):
+        with self.assertRaises(BusinessError) as error:
+            self.office.price_chart("MON/USDT")
+        self.assertEqual(error.exception.code, "invalid_chart_pair")
+        self.office = MiddleOffice(self.office.store.path, clock=lambda: self.now,
+                                   chart_pairs=("BTC/USDT", "MON/USDT", "PEPE/USDT"))
+        self.ingest("MON/USDT", "OKX", 908, "0.05")
+        self.ingest("PEPE/USDT", "demo:HashKey", 908, "0.000012")
+        for symbol, price in (("MON/USDT", "0.05"), ("PEPE/USDT", "0.000012")):
+            for minutes in ("1", "5", "10", "15"):
+                with self.subTest(symbol=symbol, minutes=minutes):
+                    chart = self.office.price_chart(symbol, minutes)
+                    self.assertEqual(chart["candles"][0]["close"], price)
+                    self.assertEqual(chart["symbol"], symbol)

@@ -269,6 +269,11 @@ class Gateway:
         if path == "/api/education" and method == "GET":
             self._ensure_profile()
             return self.ai.request(method, "/v1/education/" + self.user_id)
+        if path == "/api/trading/products" and method == "GET":
+            return self.ai.request(method, "/v1/products")
+        if path == "/api/trading/suitability" and method == "GET":
+            self._ensure_profile()
+            return self.ai.request(method, "/v1/suitability/" + self.user_id)
         if path == "/api/risk" and method == "GET":
             return self.ai.request(method, "/v1/risk/" + self.user_id + query_string(params, "quote_currency"))
         if path == "/api/market/venues" and method == "GET":
@@ -280,6 +285,8 @@ class Gateway:
             return self.middle.request(method, path + query_string(params, "symbol", "minutes"))
         if path == "/api/account/summary" and method == "GET":
             return self.middle.request(method, self.account_path + "/analysis_snapshot")
+        if path == "/api/account/deposits" and method == "POST":
+            return self.middle.request(method, self.account_path + "/deposits", body)
         if path == "/api/account/transactions" and method == "GET":
             return self.middle.request(method, self.account_path + "/trades" + query_string(params, "offset", "limit", "sort"))
         if path == "/api/orders/preview" and method == "POST":
