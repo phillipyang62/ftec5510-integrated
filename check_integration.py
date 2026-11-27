@@ -1,9 +1,8 @@
 """Exercise the questionnaire, frontend gateway, ledger, and AI over HTTP."""
 
 import argparse
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 from decimal import Decimal
-from importlib.util import find_spec
 from http.cookiejar import CookieJar
 import json
 from time import monotonic, sleep
@@ -13,11 +12,14 @@ from urllib.parse import urlencode
 from urllib.request import HTTPCookieProcessor, Request, build_opener, urlopen
 
 from run_demo import ASSESSMENT, demo_stack
-from middle_office.public_market import HK_PAIRS, USDT_PAIRS
-from middle_office.simulated_market import SIMULATED_SOURCES
+from middle_office.public_market import EXCHANGE_MARKETS
+from middle_office.simulated_market import SIMULATED_BASES, SIMULATED_SOURCES
 
 
 USER = "student_demo"
+SIMULATED_PAIRS = frozenset().union(*SIMULATED_SOURCES.values())
+SIMULATED_USDT_PAIRS = {f"{base}/USDT" for base in SIMULATED_BASES}
+FIXED_PAIRS = {"MON/USDT", "SUI/USDT", "PEPE/USDT"}
 
 
 class BrowserClient:
@@ -225,23 +227,32 @@ def check_deposits(url):
     assert checked(other, "GET", summary_path)["portfolio"]["balances"] == other_before["portfolio"]["balances"]
 
 
-def check_recent_market_context(url, middle, reader):
-    now = datetime.now(timezone.utc)
-    observations = [
-        ("CONTEXT/USD", "demo:Fixture", 5, "2"),
-        ("CONTEXT/USD", "demo:Fixture", 1, "3"),
-        ("RECENT/USDT", "PublicFixture", 2, "8"),
-        ("EXPIRED/USD", "demo:Fixture", 12, "7"),
-    ]
-    checked(middle, "POST", "/api/quotes", {"quotes": [
-        {"symbol": symbol, "source": source, "as_of": (now - timedelta(seconds=age)).isoformat(), "price": price}
-        for symbol, source, age, price in observations
-    ]})
-    snapshot = checked(reader, "GET", "/api/market/trends")
+def check_recent_market_context(url, reader):
+    # Observe the running Python producer, without injecting quotes into protected pairs.
+    deadline = monotonic() + 10
+    while True:
+        snapshot = checked(reader, "GET", "/api/market/trends")
+        snapshots = {row["symbol"]: row for row in snapshot["rows"]}
+        sampled = {symbol for symbol, row in snapshots.items() if row["sample_count"] >= 2}
+        if SIMULATED_PAIRS <= sampled:
+            break
+        assert monotonic() < deadline, f"Simulator history missing for {SIMULATED_PAIRS - sampled}"
+        sleep(0.3)
     assert snapshot["status"] == "ok" and snapshot["window_seconds"] == 10
-    snapshots = {row["symbol"]: row for row in snapshot["rows"]}
-    assert snapshots["CONTEXT/USD"]["sample_count"] == 2 and snapshots["CONTEXT/USD"]["change_pct"] == "50"
-    assert snapshots["RECENT/USDT"]["status"] == "single_sample" and "EXPIRED/USD" not in snapshots
+    start = datetime.fromisoformat(snapshot["start"].replace("Z", "+00:00"))
+    as_of = datetime.fromisoformat(snapshot["as_of"].replace("Z", "+00:00"))
+    assert (as_of - start).total_seconds() == 10
+    for symbol in SIMULATED_PAIRS:
+        row = snapshots[symbol]
+        assert row["source"] in SIMULATED_SOURCES and symbol in SIMULATED_SOURCES[row["source"]]
+        assert row["quote_mode"] == "simulation" and row["status"] == "trend"
+        first = datetime.fromisoformat(row["first_as_of"].replace("Z", "+00:00"))
+        last = datetime.fromisoformat(row["last_as_of"].replace("Z", "+00:00"))
+        assert start <= first < last <= as_of
+        assert Decimal(row["high"]) >= max(Decimal(row["open"]), Decimal(row["last"]))
+        assert 0 < Decimal(row["low"]) <= min(Decimal(row["open"]), Decimal(row["last"]))
+        change = (Decimal(row["last"]) - Decimal(row["open"])) / Decimal(row["open"]) * 100
+        assert abs(Decimal(row["change_pct"]) - change) <= Decimal("0.00000001")
 
     client = BrowserClient(url)
     checked(client, "POST", "/api/session", {"account_name": "student_market_context"})
@@ -260,10 +271,15 @@ def check_recent_market_context(url, middle, reader):
     trends = prompt["market_trends"]
     assert trends["status"] == "ok" and trends["window_seconds"] == 10
     rows = {row[0]: dict(zip(trends["columns"], row)) for row in trends["rows"]}
-    observed = rows["CONTEXT/USD"]
-    assert observed["quote_mode"] == "simulation" and observed["sample_count"] == 2 and observed["direction"] == "up"
-    assert rows["RECENT/USDT"]["direction"] is None and rows["RECENT/USDT"]["quote_mode"] == "public"
-    assert "EXPIRED/USD" not in rows
+    assert len(rows) == len(trends["rows"]) and SIMULATED_PAIRS <= rows.keys()
+    for symbol in SIMULATED_PAIRS:
+        row = rows[symbol]
+        assert row["source"] in SIMULATED_SOURCES and symbol in SIMULATED_SOURCES[row["source"]]
+        assert row["quote_mode"] == "simulation" and row["sample_count"] >= 2
+        opening, latest = Decimal(row["open"]), Decimal(row["last"])
+        expected_direction = "up" if latest > opening else "down" if latest < opening else "flat"
+        assert row["direction"] == expected_direction and row["change_pct"] is not None
+    assert connect.call_count == 1  # The configured remote provider is mocked; no billable call occurs.
 
 
 def questionnaire_form(ui, middle, ai):
@@ -334,7 +350,7 @@ def check_suitability_warnings(url):
     assert filled["status"] == "filled" and filled["suitability_warning"] == missing
 
     checked(ui, "PUT", "/api/profile", ASSESSMENT)
-    limit = {**buy, "order_type": "limit", "limit_price": "65000"}
+    limit = {**buy, "order_type": "limit", "limit_price": "1"}
     preview = checked(ui, "POST", "/api/orders/preview", limit)
     excess = {"code": "product_cap", "risk_level": "C3", "product_cap": "R3", "product_risk": "R4"}
     assert preview["suitability_warning"] == excess
@@ -362,7 +378,8 @@ def trade(ui):
     declined = checked(ui, "POST", "/api/orders/preview", {**buy, "quantity": "0.5"}, expected=409)
     assert declined["error"]["code"] == "insufficient_balance"
     estimate = checked(ui, "POST", "/api/orders/preview", buy)
-    assert estimate["source"] == "demo:HashKey" and estimate["reference_price"] == "68001"
+    assert estimate["source"] in SIMULATED_SOURCES and Decimal(estimate["reference_price"]) > 0
+    assert estimate["fee_assumed"] and Decimal(estimate["notional"]) > 0
     assert checked(ui, "GET", "/api/orders")["orders"] == []
     assert checked(ui, "GET", "/api/account/summary")["portfolio"]["balances"] == before["portfolio"]["balances"]
     ticket = {"preview_id": estimate["preview_id"]}
@@ -372,7 +389,7 @@ def trade(ui):
     assert filled == checked(ui, "POST", "/api/orders", ticket)
     assert checked(ui, "GET", f"/api/orders/{filled['order_id']}")["status"] == "filled"
     assert checked(ui, "GET", "/api/account/transactions?limit=20")["total"] == 1
-    sell = {**buy, "side": "sell", "order_type": "limit", "limit_price": "70000", "quantity": "0.005"}
+    sell = {**buy, "side": "sell", "order_type": "limit", "limit_price": "1000000", "quantity": "0.005"}
     estimate = checked(ui, "POST", "/api/orders/preview", sell)
     pending = checked(ui, "POST", "/api/orders", {"preview_id": estimate["preview_id"]})
     assert pending["status"] == "open"
@@ -408,7 +425,7 @@ def check_preset_accounts(url):
     first_page = checked(ui, "GET", history_path + "&offset=0&limit=1")
     second_page = checked(ui, "GET", history_path + "&offset=1&limit=1")
     assert first_page["trades"] + second_page["trades"] == history["trades"]
-    limit = checked(ui, "POST", "/api/orders/preview", {**buy, "order_type": "limit", "limit_price": "65000"})
+    limit = checked(ui, "POST", "/api/orders/preview", {**buy, "order_type": "limit", "limit_price": "1"})
     assert checked(ui, "POST", "/api/orders", {"preview_id": limit["preview_id"]})["status"] == "open"
     assert checked(ui, "GET", history_path) == history
     checked(ui, "PUT", "/api/profile", ASSESSMENT)
@@ -493,11 +510,25 @@ def check_asset_matching_and_orders(url):
         order = {"symbol": symbol, "side": "buy", "order_type": "market", "quantity": "0.01"}
         preview = checked(ui, "POST", "/api/orders/preview", order)
         assert Decimal(preview["notional"]) > 0 and "suitability_warning" not in preview
+        if symbol in SIMULATED_USDT_PAIRS:
+            assert preview["source"] in SIMULATED_SOURCES and preview["fee_assumed"]
         fill = checked(ui, "POST", "/api/orders", {"preview_id": preview["preview_id"]})
         assert fill["status"] == "filled" and fill["symbol"] == symbol
+        if symbol in SIMULATED_USDT_PAIRS:
+            assert fill["source"] in SIMULATED_SOURCES
         chart = checked(ui, "GET", "/api/market/history?" + urlencode({"symbol": symbol, "minutes": 1}))
         assert chart["symbol"] == symbol and chart["candles"]
+        if symbol in SIMULATED_USDT_PAIRS:
+            assert chart["simulated"] and chart["source"] in SIMULATED_SOURCES
     assert checked(ui, "GET", "/api/account/transactions")["total"] == len(symbols)
+    portfolio = checked(ui, "GET", "/api/account/summary")["portfolio"]
+    assert portfolio["state"] == "ok" and Decimal(portfolio["total_assets"]) > 0
+    positions = {row["symbol"]: row for row in portfolio["positions"]}
+    for symbol in SIMULATED_USDT_PAIRS:
+        row = positions[symbol]
+        assert row["state"] == "valued" and row["source"] in SIMULATED_SOURCES and row["as_of"]
+        expected_value = (Decimal(row["quantity"]) * Decimal(row["market_price"])).quantize(Decimal("0.00000001"))
+        assert Decimal(row["market_value"]) == expected_value > 0
     dimensions["BD"] = 50
     checked(ui, "PUT", "/api/profile", assessment)
     holdings = checked(ui, "POST", "/api/assistant/chat", {"message": "分析我的持仓风险"})
@@ -519,13 +550,15 @@ def offline_checks():
 
         check_sign_in(ui)
         catalog = checked(ui, "GET", "/api/market/catalog")
-        assert catalog["market_mode"] == "simulation" and len(catalog["pairs"]) == 13
-        for symbol in ("BTC/USDT", "ETH/USDT", "SOL/USDT"):
-            assert catalog["pairs"][symbol] == ["demo:HashKey", "demo:OSL"]
+        assert catalog["market_mode"] == "simulation"
+        assert set(catalog["pairs"]) == SIMULATED_PAIRS | FIXED_PAIRS
+        check_simulated_market(ui, catalog["pairs"], monotonic() + 10)
+        for symbol in FIXED_PAIRS:
+            assert set(catalog["pairs"][symbol]) == {"demo:HashKey", "demo:OSL"}
         print("PASS account-name sign-in, session cookie, and anonymous access check")
 
         check_asset_matching_and_orders(url)
-        print("PASS data-driven asset learning, five-dimensional matching, and 13 simulated orders plus charts")
+        print("PASS asset learning, five-dimensional matching, and 13 simulated orders, charts and valuations")
 
         check_preset_accounts(url)
         print("PASS five preset assessments, starting holdings, and histories populated only by fills")
@@ -536,8 +569,8 @@ def offline_checks():
         check_session_models(url)
         print("PASS mocked DeepSeek, OpenAI and Gemini calls, consent, provider key isolation and account privacy")
 
-        check_recent_market_context(url, middle, reader)
-        print("PASS ten-second market observations reach the assistant across the read-only middle-office API")
+        check_recent_market_context(url, reader)
+        print("PASS collected Python simulator samples reach the mocked model through the read-only ten-second API")
 
         questionnaire_form(ui, middle, ai)
         print("PASS questionnaire, example RAI 61/C3/R3, risk caps and profile-based education")
@@ -551,7 +584,7 @@ def offline_checks():
         query = urlencode({"symbol": "BTC/USDT", "quantity": "0.01", "side": "buy"})
         venue_report = checked(ui, "GET", "/api/market/venues?" + query)
         assert venue_report["status"] == "ok" and len(venue_report["venues"]) == 2
-        assert {row["source"] for row in venue_report["venues"]} == {"demo:HashKey", "demo:OSL"}
+        assert {row["source"] for row in venue_report["venues"]} == set(SIMULATED_SOURCES)
         assert all(row["quote_currency"] == "USDT" and row["price"] and row["as_of"] for row in venue_report["venues"])
         print("PASS frontend receives both venues with currency, price, and timestamp")
 
@@ -559,8 +592,8 @@ def offline_checks():
         for minutes in (1, 5, 10, 15):
             chart = checked(ui, "GET", f"{history_path}&minutes={minutes}")
             assert chart["minutes"] == minutes and chart["interval_seconds"] == 10
-            assert chart["simulated"] and chart["source"] == "demo:HashKey"
-            assert chart["candles"][-1]["close"] == "68000"
+            assert chart["simulated"] and chart["source"] in SIMULATED_SOURCES
+            assert chart["candles"] and Decimal(chart["candles"][-1]["close"]) > 0
         assert checked(ui, "GET", history_path + "&minutes=4", expected=400)["error"]["code"] == "invalid_chart_range"
         print("PASS signed-in order chart reads four quote windows from middle office")
 
@@ -605,7 +638,8 @@ def live_comparison(ui, symbol, deadline, *, required_sources=(), minimum=2, quo
         if monotonic() >= deadline:
             raise AssertionError(f"Incomplete live quotes for {symbol}: {report}")
         sleep(0.6)
-    assert report["market_mode"] == "public" and report["ranking_basis"] == "bid_ask_excluding_fees"
+    assert report["market_mode"] in {"simulation", "public"}
+    assert report["ranking_basis"] == "bid_ask_excluding_fees"
     assert report["quote_mode"] == quote_mode
     for quote in report["venues"]:
         assert quote["quote_currency"] == symbol.split("/")[1] and quote["fee_rate"] is None
@@ -616,19 +650,22 @@ def live_comparison(ui, symbol, deadline, *, required_sources=(), minimum=2, quo
 
 
 def check_simulated_market(ui, catalog, deadline):
-    supported = {symbol for pairs in SIMULATED_SOURCES.values() for symbol in pairs}
-    assert {symbol for symbol in catalog if symbol.startswith(("BTC/", "ETH/"))} == supported
-    for symbol in sorted(supported):
+    assert SIMULATED_BASES == {"BTC", "ETH", "XRP", "ADA", "LINK", "SOL", "AVAX", "DOGE", "USDC", "RLUSD"}
+    assert sum(map(len, SIMULATED_SOURCES.values())) == 25
+    assert {symbol for symbol in catalog if symbol.split("/")[0] in SIMULATED_BASES} == SIMULATED_PAIRS
+    assert set(catalog["BTC/HKD"]) == {"demo:MDGateway:HashKey"}
+    for symbol in sorted(SIMULATED_PAIRS):
         expected = {source for source, pairs in SIMULATED_SOURCES.items() if symbol in pairs}
         assert set(catalog[symbol]) == expected
         report = live_comparison(ui, symbol, deadline, required_sources=expected, minimum=len(expected),
                                  quote_mode="simulation")
         assert {row["source"] for row in report["venues"]} == expected
-        assert all(row["bid_size"] == row["ask_size"] == "1" for row in report["venues"])
+        assert all(Decimal(row["bid_size"]) > 0 and Decimal(row["ask_size"]) > 0
+                   and row["timestamp_source"] == "collected" for row in report["venues"])
 
-    for symbol in ("BTC/USDT", "ETH/USDT"):
+    for symbol in ("BTC/USDT", "XRP/USDT"):
         chart = checked(ui, "GET", "/api/market/history?" + urlencode({"symbol": symbol, "minutes": 1}))
-        assert chart["source"] == "demo:MDGateway:HashKey" and chart["simulated"] and chart["candles"]
+        assert chart["source"] in SIMULATED_SOURCES and chart["simulated"] and chart["candles"]
         preview = checked(ui, "POST", "/api/orders/preview", {
             "symbol": symbol, "side": "buy", "quantity": "0.01", "order_type": "market",
         })
@@ -638,7 +675,7 @@ def check_simulated_market(ui, catalog, deadline):
         })
         assert "多来源买卖报价" in chat["reply"] and "模拟报价" in chat["reply"]
         assert {row["source"] for row in chat["market"][0]["venues"] if row["freshness"] == "fresh"} == set(SIMULATED_SOURCES)
-    print("PASS BTC and ETH charts, order previews and AI use the simulated market")
+    print("PASS all ten Python asset feeds, retained USD/HKD legs, and simulated chart/preview/chat sources")
 
 
 def live_checks():
@@ -649,33 +686,38 @@ def live_checks():
         questionnaire_form(ui, middle, ai)
         catalog = checked(ui, "GET", "/api/market/catalog")
         assert catalog["market_mode"] == "public"
-        assert {"HashKey", "OSL"} <= set(catalog["pairs"]["SOL/USD"])
-        assert {"Binance", "OKX", "Kraken"} <= set(catalog["pairs"]["USDC/USDT"])
-        exchange_pairs = [symbol for symbol in USDT_PAIRS + HK_PAIRS if not symbol.startswith(("BTC/", "ETH/"))]
-        assert set(exchange_pairs) <= catalog["pairs"].keys()
-        deadline = monotonic() + 22
-        check_simulated_market(ui, catalog["pairs"], deadline)
-        hk_sources = {"HashKey", "OSL"} if find_spec("websockets") else {"HashKey"}
-        if "OSL" not in hk_sources:
-            print("SKIP OSL comparison (install requirements-live.txt)")
-        for symbol in (symbol for symbol in HK_PAIRS if symbol in exchange_pairs):
-            live_comparison(ui, symbol, deadline, required_sources=hk_sources, minimum=len(hk_sources))
+        exchange_pairs = frozenset().union(*EXCHANGE_MARKETS.values())
+        assert exchange_pairs <= catalog["pairs"].keys()
+        assert all(symbol.split("/")[0] not in SIMULATED_BASES for symbol in exchange_pairs)
+        assert "SOL/USD" not in catalog["pairs"] and "ETH/HKD" not in catalog["pairs"]
+        check_simulated_market(ui, catalog["pairs"], monotonic() + 10)
 
-        chat = checked(ui, "POST", "/api/assistant/chat", {"message": "比较 SOL/USDT 的报价", "market_queries": ["SOL/USDT"]})
+        # Public endpoint coverage differs by region and venue. Require a usable,
+        # separately classified public comparison, rather than every configured pair.
+        candidates = ("LTC/USDT", "DOT/USDT", "AAVE/USDT")
+        deadline = monotonic() + 22
+        while True:
+            symbol = None
+            for candidate in candidates:
+                query = urlencode({"symbol": candidate, "quantity": "0.01", "side": "buy"})
+                report = checked(ui, "GET", "/api/market/venues?" + query)
+                if len(report["venues"]) >= 2:
+                    symbol = candidate
+                    break
+            if symbol:
+                break
+            assert monotonic() < deadline, "No two-source public quote for LTC, DOT or AAVE"
+            sleep(0.6)
+        report = live_comparison(ui, symbol, deadline)
+        assert not {row["source"] for row in report["venues"]}.intersection(SIMULATED_SOURCES)
+        assert {row["source"] for row in report["venues"]} <= set(catalog["pairs"][symbol])
+        chat = checked(ui, "POST", "/api/assistant/chat", {
+            "message": f"比较 {symbol} 的报价", "market_queries": [symbol],
+        })
         venues = {row["source"] for row in chat["market"][0]["venues"] if row["freshness"] == "fresh"}
         assert len(venues) >= 2 and not venues.intersection(SIMULATED_SOURCES)
-        assert "多来源买卖报价" in chat["reply"]
-        print("PASS public Solana quotes reach the assistant through middle office")
-        if "OSL" in hk_sources:
-            hk_chat = checked(ui, "POST", "/api/assistant/chat", {"message": "比较 SOL/USD 的报价", "market_queries": ["SOL/USD"]})
-            venues = {row["source"] for row in hk_chat["market"][0]["venues"] if row["freshness"] == "fresh"}
-            assert venues == hk_sources
-            print("PASS the assistant reads both Hong Kong venues for SOL/USD")
-        for symbol in (symbol for symbol in USDT_PAIRS if symbol in exchange_pairs):
-            live_comparison(ui, symbol, deadline)
-        new_asset = checked(ui, "POST", "/api/assistant/chat", {"message": "比较 XRP/USDT 的报价", "market_queries": ["XRP/USDT"]})
-        assert {"Binance", "OKX"} <= {row["source"] for row in new_asset["market"][0]["venues"] if row["freshness"] == "fresh"}
-        print("PASS expanded catalog and XRP quotes reach the assistant")
+        assert "多来源买卖报价" in chat["reply"] and "模拟报价" not in chat["reply"]
+        print(f"PASS hybrid mode keeps ten Python assets isolated and {symbol} public through the assistant")
 
 
 def main():

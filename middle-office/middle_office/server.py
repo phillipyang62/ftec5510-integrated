@@ -79,7 +79,7 @@ class Handler(BaseHTTPRequestHandler):
         if (method, path) == ("GET", "/health"):
             feed = getattr(self.server, "public_feed", None)
             return 200, {"status": "ok", "mode": "simulation", "modules": 6, "api_version": 1,
-                         "market_mode": "public" if self.server.office.public_sources else "simulation",
+                         "market_mode": self.server.office.market_mode,
                          "public_sources": feed.snapshot() if feed else {}}
         self._authorize(path)
         office = self.server.office

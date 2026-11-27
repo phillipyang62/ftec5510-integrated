@@ -47,10 +47,10 @@ class MarketTrendsTests(unittest.TestCase):
             self.office.price_chart("DOT/USDT")
 
     def test_prefers_a_real_series_over_a_single_preferred_source_without_mixing_venues(self):
-        self.ingest("SOL/USDT", "Binance", 1, "999")
-        self.ingest("SOL/USDT", "Kraken", 8, "100")
-        self.ingest("SOL/USDT", "Kraken", 4, "90")
-        self.ingest("SOL/USDT", "Kraken", 2, "110")
+        self.ingest("DOT/USDT", "Binance", 1, "999")
+        self.ingest("DOT/USDT", "Kraken", 8, "100")
+        self.ingest("DOT/USDT", "Kraken", 4, "90")
+        self.ingest("DOT/USDT", "Kraken", 2, "110")
 
         row, = self.office.market_trends()["rows"]
 
@@ -61,27 +61,27 @@ class MarketTrendsTests(unittest.TestCase):
 
     def test_latest_source_must_be_fresh_then_preferred_source_breaks_series_ties(self):
         self.office.max_quote_age = 3
-        self.ingest("SOL/USDT", "Binance", 10, "100")
-        self.ingest("SOL/USDT", "Binance", 8, "110")
-        self.ingest("SOL/USDT", "OKX", 4, "80")
-        self.ingest("SOL/USDT", "OKX", 2, "88")
-        self.ingest("SOL/USDT", "Kraken", 0, "999")
+        self.ingest("DOT/USDT", "Binance", 10, "100")
+        self.ingest("DOT/USDT", "Binance", 8, "110")
+        self.ingest("DOT/USDT", "OKX", 4, "80")
+        self.ingest("DOT/USDT", "OKX", 2, "88")
+        self.ingest("DOT/USDT", "Kraken", 0, "999")
 
         self.assertEqual(self.office.market_trends()["rows"][0]["source"], "OKX")
 
-        self.ingest("SOL/USDT", "Binance", 1, "120")
+        self.ingest("DOT/USDT", "Binance", 1, "120")
         row, = self.office.market_trends()["rows"]
         self.assertEqual(row["source"], "Binance")
         self.assertEqual(row["sample_count"], 3)
         self.assertEqual(row["change_pct"], "20")
 
     def test_window_is_inclusive_and_excludes_future_and_duplicate_observations(self):
-        self.ingest("SOL/USDT", "Binance", 10.000001, "99")
-        self.ingest("SOL/USDT", "Binance", 10, "100")
-        self.ingest("SOL/USDT", "Binance", 0, "110")
-        self.assertEqual(self.ingest("SOL/USDT", "Binance", 0, "999")["ignored"], 1)
-        self.ingest("SOL/USDT", "Binance", -1, "999")
-        self.ingest("ADA/USDT", "OKX", -1, "100")
+        self.ingest("DOT/USDT", "Binance", 10.000001, "99")
+        self.ingest("DOT/USDT", "Binance", 10, "100")
+        self.ingest("DOT/USDT", "Binance", 0, "110")
+        self.assertEqual(self.ingest("DOT/USDT", "Binance", 0, "999")["ignored"], 1)
+        self.ingest("DOT/USDT", "Binance", -1, "999")
+        self.ingest("LTC/USDT", "OKX", -1, "100")
 
         row, = self.office.market_trends()["rows"]
 
@@ -114,10 +114,13 @@ class MarketTrendsTests(unittest.TestCase):
         self.ingest("BTC/USDT", "Binance", 1, "999")
         self.ingest("BTC/USDT", "demo:MDGateway:HashKey", 1, "75000")
         self.ingest("SOL/USDT", "Binance", 1, "182")
+        self.ingest("SOL/USDT", "demo:MDGateway:HashKey", 1, "181")
+        self.ingest("DOT/USDT", "Binance", 1, "4")
         rows = self.office.market_trends()["rows"]
         self.assertEqual([(row["symbol"], row["source"], row["quote_mode"]) for row in rows], [
             ("BTC/USDT", "demo:MDGateway:HashKey", "simulation"),
-            ("SOL/USDT", "Binance", "public"),
+            ("DOT/USDT", "Binance", "public"),
+            ("SOL/USDT", "demo:MDGateway:HashKey", "simulation"),
         ])
 
     def test_read_token_allows_only_get_and_missing_credentials_fail(self):

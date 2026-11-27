@@ -1,4 +1,4 @@
-"""Collect public spot quotes and the team's simulated BTC and ETH quotes."""
+"""Collect public spot quotes and the team's simulated asset quotes."""
 
 import json
 import logging
@@ -12,7 +12,7 @@ from urllib.parse import urlencode
 from urllib.request import Request, build_opener
 
 from .market import NoRedirect
-from .simulated_market import SIMULATED_SOURCES, SIMULATOR_INTERVAL, SIMULATOR_NAME, SimulatedMarket
+from .simulated_market import SIMULATED_BASES, SIMULATED_SOURCES, SIMULATOR_INTERVAL, SIMULATOR_NAME, SimulatedMarket
 from .validation import BusinessError, amount, iso, number
 
 
@@ -29,13 +29,14 @@ ASSETS = {
     "LTC": ("Litecoin", ["莱特币"]),
     "USDT": ("Tether", ["泰达币"]),
     "USDC": ("USD Coin", []),
+    "RLUSD": ("Ripple USD", []),
     "MON": ("Monad", ["Monad"]),
 }
 USDT_PAIRS = tuple(f"{ticker}/USDT" for ticker in (
     "BTC ETH SOL XRP LINK AVAX ADA DOGE DOT LTC BCH UNI ATOM XLM SUI NEAR APT ETC HBAR TRX "
     "BNB SHIB PEPE FIL ARB OP ICP AAVE INJ POL SEI WLD RENDER ALGO GRT COMP ZEC STX USDC RLUSD USDS"
 ).split())
-KRAKEN_PAIRS = {
+_KRAKEN_PAIRS = {
     f"{ticker}USDT": f"{ticker}/USDT" for ticker in
     "SOL XRP LINK AVAX ADA DOT LTC BCH ATOM BNB TON SHIB ALGO USDC DAI RLUSD".split()
 }
@@ -43,20 +44,21 @@ HK_PAIRS = ("BTC/USD", "ETH/USD", "SOL/USD", "BTC/HKD", "ETH/HKD", "LINK/USD", "
 _EXCHANGE_MARKETS = {
     "Binance": (*USDT_PAIRS, "FDUSD/USDT", "TUSD/USDT"),
     "OKX": (*USDT_PAIRS, "TON/USDT", "PYUSD/USDT", "MON/USDT"),
-    "Kraken": tuple(KRAKEN_PAIRS.values()),
+    "Kraken": tuple(_KRAKEN_PAIRS.values()),
     "HashKey": (*HK_PAIRS, "BTC/USDT", "ETH/USDT", "FDUSD/USD", "RLUSD/USD",
                 "AAVE/USD", "ARB/USD", "POL/USD", "OP/USD", "LTC/USD", "SUI/USD",
                 "APT/USD", "XRP/USD", "AVAX/USD", "DOGE/USD", "UNI/USD"),
     "OSL": (*HK_PAIRS, "SOL/HKD", "RLUSD/HKD", "USDGO/USD", "USDGO/USDT"),
 }
 EXCHANGE_MARKETS = {
-    source: tuple(symbol for symbol in symbols if not symbol.startswith(("BTC/", "ETH/")))
+    source: tuple(symbol for symbol in symbols if symbol.split("/")[0] not in SIMULATED_BASES)
     for source, symbols in _EXCHANGE_MARKETS.items()
 }
 PROVIDER_MARKETS = {**EXCHANGE_MARKETS, **SIMULATED_SOURCES}
 FEED_MARKETS = {**EXCHANGE_MARKETS, SIMULATOR_NAME: frozenset().union(*SIMULATED_SOURCES.values())}
 BINANCE_PAIRS = {symbol.replace("/", ""): symbol for symbol in PROVIDER_MARKETS["Binance"]}
 OKX_PAIRS = {symbol.replace("/", "-"): symbol for symbol in PROVIDER_MARKETS["OKX"]}
+KRAKEN_PAIRS = {key: symbol for key, symbol in _KRAKEN_PAIRS.items() if symbol in EXCHANGE_MARKETS["Kraken"]}
 HASHKEY_PAIRS = {symbol.replace("/", ""): symbol for symbol in PROVIDER_MARKETS["HashKey"]}
 OSL_PAIRS = {symbol.replace("/", ""): symbol for symbol in PROVIDER_MARKETS["OSL"]}
 HASHKEY_BASE = "https://api-pro.hashkey.com/quote/v1/ticker/"
@@ -195,15 +197,17 @@ def _fetch(url):
 
 
 class PublicMarketFeed:
-    def __init__(self, office, *, interval=4, fetch=_fetch):
+    def __init__(self, office, *, interval=4, fetch=_fetch, include_public=True):
         self.office = office
         self.interval = max(4, interval)
         self.fetch = fetch
         self.stop_event = Event()
         self.lock = Lock()
         self.simulator = SimulatedMarket()
-        self.status = {name: {"state": "starting"} for name in FEED_MARKETS}
-        self.threads = [Thread(target=self._run, args=(name,), daemon=True) for name in FEED_MARKETS]
+        self.simulator_ready = Event()
+        self.feed_markets = FEED_MARKETS if include_public else {SIMULATOR_NAME: FEED_MARKETS[SIMULATOR_NAME]}
+        self.status = {name: {"state": "starting"} for name in self.feed_markets}
+        self.threads = [Thread(target=self._run, args=(name,), daemon=True) for name in self.feed_markets]
 
     def snapshot(self):
         with self.lock:
@@ -212,8 +216,11 @@ class PublicMarketFeed:
     def poll(self, name):
         if name == SIMULATOR_NAME:
             now = self.office.clock()
-            quotes = [_quote(symbol, source, price, bid, ask, 1, 1, now, "collected")
-                      for symbol, source, price, bid, ask in self.simulator.step()]
+            quotes = []
+            for symbol, source, price, bid, ask in self.simulator.step():
+                bid_size = Decimal("100000") / bid
+                ask_size = Decimal("100000") / ask
+                quotes.append(_quote(symbol, source, price, bid, ask, bid_size, ask_size, now, "collected"))
         elif name == "HashKey":
             quotes = _hashkey(self.fetch)
         elif name == "OSL":
@@ -224,7 +231,7 @@ class PublicMarketFeed:
             quotes = decode(payload, received)
         if self.stop_event.is_set():
             return []
-        quotes = [row for row in quotes if row is not None]
+        quotes = [row for row in quotes if row is not None and row["symbol"] in self.feed_markets[name]]
         statuses = {row["symbol"] for row in quotes if self.office._fresh(row)}
         if not statuses:
             raise ValueError("No current tracked quotes")
@@ -236,7 +243,7 @@ class PublicMarketFeed:
         while not self.stop_event.is_set():
             try:
                 pairs = self.poll(name)
-                result = {"state": "ok" if len(pairs) == len(FEED_MARKETS[name]) else "partial", "pairs": pairs}
+                result = {"state": "ok" if len(pairs) == len(self.feed_markets[name]) else "partial", "pairs": pairs}
                 failures = 0
             except ModuleNotFoundError:
                 LOG.warning("OSL public feed requires the optional requirements-live.txt dependency")
@@ -252,6 +259,7 @@ class PublicMarketFeed:
                 self.status[name] = {**result, "checked_at": iso(datetime.now(timezone.utc))}
             interval = self.interval
             if name == SIMULATOR_NAME:
+                self.simulator_ready.set()
                 interval = SIMULATOR_INTERVAL
             elif name == "OSL":
                 interval = max(10, interval)
@@ -261,6 +269,7 @@ class PublicMarketFeed:
     def start(self):
         for thread in self.threads:
             thread.start()
+        self.simulator_ready.wait(timeout=2)
 
     def stop(self):
         self.stop_event.set()

@@ -26,6 +26,7 @@ class MiddleOffice:
         require(type(max_quote_age) is int and max_quote_age > 0, "invalid_config", "max_quote_age must be positive")
         self.max_quote_age = max_quote_age
         self.public_sources = frozenset(public_sources)
+        self.market_mode = "public" if any(not source.startswith("demo:") for source in self.public_sources) else "simulation"
         self.public_source_pairs = public_source_pairs or {}
         self.product_risks = product_risks or {}
         self.suitability_advisory = suitability_advisory
@@ -316,19 +317,19 @@ class MiddleOffice:
                 venues.append({**quote, "execution_price": amount(price), "fee": amount(fee) if fee is not None else None,
                                "total": net, "quote_currency": currency, "notional": amount(value),
                                "quantity_covered": qty <= D(size) if size is not None else None})
-            pre_fee = bool(self.public_sources) or any(q["fee_rate"] is None for q in venues)
+            expected = {source for source in self.public_sources
+                        if symbol in self.public_source_pairs.get(source, (symbol,))}
+            simulated = not self.public_sources or any(source.startswith("demo:") for source in expected)
+            pre_fee = (self.market_mode == "public" and not simulated) or any(q["fee_rate"] is None for q in venues)
             if pre_fee:
                 direction = 1 if side == "buy" else -1
                 venues.sort(key=lambda q: (q["quantity_covered"] is False, direction * D(q["execution_price"]), q["source"]))
             else:
                 venues.sort(key=lambda q: (D(q["total"]), q["source"]), reverse=side == "sell")
             eligible = [q for q in venues if q["quantity_covered"] is not False]
-            expected = {source for source in self.public_sources
-                        if symbol in self.public_source_pairs.get(source, (symbol,))}
             missing = expected - {q["source"] for q in venues} - set(excluded)
-            simulated = not self.public_sources or any(source.startswith("demo:") for source in expected)
             return {"symbol": symbol, "side": side, "quantity": amount(qty), "mode": "simulation",
-                    "market_mode": "public" if self.public_sources else "simulation",
+                    "market_mode": self.market_mode,
                     "quote_mode": "simulation" if simulated else "public",
                     "venues": venues, "excluded_sources": sorted(excluded), "missing_sources": sorted(missing),
                     "status": "ok" if len(venues) >= 2 else "insufficient_sources",
@@ -347,7 +348,7 @@ class MiddleOffice:
         for source in sorted(self.public_sources):
             for symbol in self.public_source_pairs.get(source, ()):
                 pairs.setdefault(symbol, []).append(source)
-        return {"market_mode": "public" if self.public_sources else "simulation", "pairs": pairs}
+        return {"market_mode": self.market_mode, "pairs": pairs}
 
     def _reserved(self, state, user, currency=None, symbol=None, exclude=None):
         result = D(0)

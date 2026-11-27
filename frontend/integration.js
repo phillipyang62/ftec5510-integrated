@@ -362,7 +362,7 @@
         if (!spotAssets.has(asset)) spotAssets.set(asset, []);
         spotAssets.get(asset).push({ symbol, currency, sources });
       }
-      if (catalog.market_mode === "public" && spotAssets.size) {
+      if (spotAssets.size) {
         const tickers = [...spotAssets.keys()].sort();
         publicAsset.replaceChildren(...tickers.map((ticker) => new Option(ticker, ticker)));
         if (spotAssets.has("BTC")) publicAsset.value = "BTC";
@@ -377,7 +377,7 @@
     loadAssetGroups();
     if (!groupTimer) {
       groupTimer = setInterval(() => {
-        if (!document.hidden) loadAssetGroups();
+        if (!document.hidden && !one("#screen-compare").hidden) loadAssetGroups();
       }, groupRefreshMs);
     }
   }
@@ -511,6 +511,13 @@
     { asset: "BTC", zh: "比特币", en: "Bitcoin" },
     { asset: "ETH", zh: "以太坊", en: "Ethereum" },
     { asset: "SOL", zh: "索拉纳", en: "Solana" },
+    { asset: "XRP", zh: "瑞波币", en: "XRP" },
+    { asset: "ADA", zh: "艾达币", en: "Cardano" },
+    { asset: "LINK", zh: "Chainlink", en: "Chainlink" },
+    { asset: "AVAX", zh: "雪崩协议", en: "Avalanche" },
+    { asset: "DOGE", zh: "狗狗币", en: "Dogecoin" },
+    { asset: "USDC", zh: "USDC", en: "USDC" },
+    { asset: "RLUSD", zh: "RLUSD", en: "RLUSD" },
   ]);
   let groupVersion = 0;
   let groupTimer = null;
@@ -530,9 +537,10 @@
   function formatGroupPrice(value, currency = "USD") {
     const amount = numeric(value);
     if (amount == null) return "—";
+    const digits = amount >= 10 ? 2 : amount >= 0.01 ? 4 : 8;
     return new Intl.NumberFormat("en-US", {
-      minimumFractionDigits: 2,
-      maximumFractionDigits: 2,
+      minimumFractionDigits: digits,
+      maximumFractionDigits: digits,
     }).format(amount) + ` ${currency}`;
   }
 
@@ -716,7 +724,10 @@
   async function loadAssetGroups() {
     const version = ++groupVersion;
     bilingual(one(".da-fresh"), "正在刷新资产组…", "Refreshing asset groups…");
-    const groups = await Promise.all(ASSET_GROUPS.map(async (definition) => ({
+    const visibleGroups = ASSET_GROUPS.filter(({ asset }) =>
+      defaultPairs.includes(asset + "/USDT") ||
+      spotAssets.get(asset)?.some(({ sources }) => sources.some((source) => source.startsWith("demo:MDGateway:"))));
+    const groups = await Promise.all(visibleGroups.map(async (definition) => ({
       definition,
       data: await loadAssetGroup(definition.asset),
     })));
@@ -745,21 +756,20 @@
       const [result, orderQuotes] = await Promise.all([comparison, symbol === orderPair ? comparison : venueQuotes(orderPair)]);
       if (version !== marketVersion) return;
       const publicMarket = result.market_mode === "public";
-      const simulatedFeed = publicMarket && result.quote_mode === "simulation";
+      const simulatedFeed = result.quote_mode === "simulation";
       const preFee = result.ranking_basis === "bid_ask_excluding_fees";
-      if (publicMarket) {
-        const refreshMs = simulatedFeed ? 2000 : 10000;
-        if (marketRefreshMs !== refreshMs) {
-          clearInterval(marketTimer);
-          marketRefreshMs = refreshMs;
-          marketTimer = setInterval(() => {
-            if (!document.hidden) loadMarket(venue.value, true);
-          }, refreshMs);
-        }
-        bilingual(marketColumns[3], "卖一挂单数量", "Best ask size");
-      } else {
-        bilingual(marketColumns[3], "手续费", "Fee");
+      const runningSimulator = [...result.venues, ...orderQuotes.venues]
+        .some((quote) => quote.source.startsWith("demo:MDGateway:"));
+      const refreshMs = runningSimulator ? 2000 : 10000;
+      if (marketRefreshMs !== refreshMs) {
+        clearInterval(marketTimer);
+        marketRefreshMs = refreshMs;
+        marketTimer = setInterval(() => {
+          if (!document.hidden) loadMarket(venue.value, true);
+        }, refreshMs);
       }
+      if (preFee) bilingual(marketColumns[3], "卖一挂单数量", "Best ask size");
+      else bilingual(marketColumns[3], "手续费", "Fee");
       if (preFee) bilingual(marketColumns[5], "报价金额（未计费）", "Notional (fees excluded)");
       else bilingual(marketColumns[5], "含费总额（0.01 币）", "Total with fee (0.01 units)");
       if (!preview && !submitting) setVenues(orderQuotes.venues, background ? venue.value : selectedVenue);
@@ -788,7 +798,7 @@
           bilingual(notional, "卖一档数量不足", "Insufficient at best ask");
         }
         tableRow(marketBody, [venueLabel, money(quote.ask, quote.quote_currency), money(quote.bid, quote.quote_currency),
-          publicMarket ? money(quote.ask_size, symbol.split("/")[0]) : fee, timestamp, notional, action]);
+          preFee ? money(quote.ask_size, symbol.split("/")[0]) : fee, timestamp, notional, action]);
       }
       const latest = result.venues.map((quote) => quote.as_of).sort().at(-1);
       if (publicMarket && !simulatedFeed) bilingual(one(".da-fresh"), `公开现货 · ${time(latest)}`, `Public spot · ${time(latest)}`);

@@ -82,7 +82,7 @@ python -m middle_office --market-url http://127.0.0.1:8300/quotes --market-inter
 
 上游返回 `{ "quotes": [...] }`，字段见 API 文档。`MO_MARKET_TOKEN` 为可选上游 Bearer 凭证。服务保留采集时间，上游失败时旧报价按原时间自然过期。
 
-使用 `python -m middle_office --public-market` 时，BTC 和 ETH 由组内 MDGateway 模拟器的 Python 移植版生成；SOL 和其他币种继续连接 Binance、OKX、Kraken、HashKey 香港站和 OSL 香港站的原有公开行情，无需 API Key。OSL 的公开 WebSocket 使用仓库根目录 `requirements-live.txt` 中的可选客户端。公开模式默认使用单独的 SQLite 文件，行情保鲜期为 45 秒。比价按同一交易对的买卖一档排序并标注该档数量。[来源和启动方式](../README.md#问卷与行情来源)
+组内 MDGateway 的 Python 行情生成器覆盖 BTC、ETH、XRP、ADA、LINK、SOL、AVAX、DOGE、USDC、RLUSD。根目录的 `python run_demo.py` 可离线使用这套模拟行情。中台独立运行时，`python -m middle_office --public-market` 同时从 Binance、OKX、Kraken、HashKey 香港站和 OSL 香港站获取其他币种的公开行情。OSL 的公开 WebSocket 使用仓库根目录 `requirements-live.txt` 中的可选客户端。公开模式默认使用单独的 SQLite 文件，行情保鲜期为 45 秒。比价按同一交易对的买卖一档排序并标注该档数量。[来源和启动方式](../README.md#问卷与行情来源)
 
 ## 原型范围
 

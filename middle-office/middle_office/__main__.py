@@ -5,6 +5,7 @@ import os
 from .market import MarketFeed
 from .price_history import CHART_PAIRS
 from .public_market import PROVIDER_MARKETS, QUOTE_MAX_AGE, PublicMarketFeed
+from .simulated_market import SIMULATED_BASES
 from .service import MiddleOffice
 from .server import Server
 
@@ -34,9 +35,12 @@ def main():
     database = args.db or (".middle_office/public-ledger.sqlite3" if args.public_market else ".middle_office/ledger.sqlite3")
     quote_age = args.quote_max_age if args.quote_max_age is not None else (QUOTE_MAX_AGE if args.public_market else 120)
     sources = PROVIDER_MARKETS if args.public_market else {}
+    charts = {*CHART_PAIRS, *requirements}
+    if args.public_market:
+        charts.update(f"{base}/USDT" for base in SIMULATED_BASES)
     office = MiddleOffice(database, max_quote_age=quote_age, product_risks=risks, public_sources=sources,
                           public_source_pairs=sources, product_requirements=requirements,
-                          chart_pairs=CHART_PAIRS | requirements.keys(),
+                          chart_pairs=charts,
                           suitability_advisory=args.suitability_advisory)
     server = Server((args.host, args.port), office, token=os.getenv("MO_API_TOKEN"), read_token=os.getenv("MO_AI_READ_TOKEN"))
     feed = None

@@ -4,6 +4,7 @@ from tempfile import TemporaryDirectory
 import unittest
 
 from middle_office.public_market import PROVIDER_MARKETS
+from middle_office.price_history import CHART_PAIRS
 from middle_office.service import MiddleOffice
 from middle_office.validation import BusinessError, iso
 
@@ -16,7 +17,8 @@ class PriceHistoryTests(unittest.TestCase):
         self.now = self.start + timedelta(seconds=909)
         self.office = MiddleOffice(Path(directory.name) / "ledger.sqlite3", clock=lambda: self.now,
                                    max_quote_age=45, public_sources=PROVIDER_MARKETS,
-                                   public_source_pairs=PROVIDER_MARKETS)
+                                   public_source_pairs=PROVIDER_MARKETS,
+                                   chart_pairs=CHART_PAIRS | {"DOT/USDT"})
 
     def ingest(self, symbol, source, second, price):
         return self.office.ingest_quotes({"quotes": [{
@@ -48,13 +50,13 @@ class PriceHistoryTests(unittest.TestCase):
     def test_keeps_pairs_separate_and_uses_fresh_sources(self):
         self.ingest("ETH/USDT", "demo:MDGateway:HashKey", 850, 3800)
         self.ingest("ETH/USDT", "demo:MDGateway:OSL", 908, 3801)
-        self.ingest("SOL/USDT", "Binance", 908, 145)
+        self.ingest("DOT/USDT", "Binance", 908, 145)
         self.assertEqual(self.office.price_chart("BTC/USDT")["status"], "empty")
         self.assertEqual(self.office.price_chart("ETH/USDT")["source"], "demo:MDGateway:OSL")
-        sol = self.office.price_chart("SOL/USDT")
-        self.assertEqual(sol["source"], "Binance")
-        self.assertFalse(sol["simulated"])
-        self.assertEqual(sol["candles"][0]["close"], "145")
+        public_chart = self.office.price_chart("DOT/USDT")
+        self.assertEqual(public_chart["source"], "Binance")
+        self.assertFalse(public_chart["simulated"])
+        self.assertEqual(public_chart["candles"][0]["close"], "145")
 
         self.now += timedelta(seconds=45)
         self.assertEqual(self.office.price_chart("ETH/USDT", "5")["status"], "stale")
