@@ -20,6 +20,18 @@ def market_quote(symbol="BTC/USDT", **overrides):
     }
 
 
+def trend_snapshot(age=0):
+    now = datetime.now(timezone.utc) - timedelta(seconds=age)
+    return {"as_of": now.isoformat(), "start": (now - timedelta(seconds=10)).isoformat(),
+            "window_seconds": 10, "status": "ok", "rows": [{
+                "symbol": "BTC/USDT", "quote_currency": "USDT", "source": "Binance", "quote_mode": "public",
+                "status": "trend", "sample_count": 2,
+                "first_as_of": (now - timedelta(seconds=9)).isoformat(),
+                "last_as_of": (now - timedelta(seconds=1)).isoformat(),
+                "open": "100", "last": "101", "low": "100", "high": "101", "change_pct": "1",
+            }]}
+
+
 class QuoteBookTests(unittest.TestCase):
     def test_batch_is_atomic_and_snapshots_do_not_mutate_storage(self):
         book = QuoteBook()
@@ -104,6 +116,61 @@ class QuoteBookTests(unittest.TestCase):
 
 
 class HttpTradingProviderTests(unittest.TestCase):
+    def test_holdings_use_exact_nonzero_portfolio_positions_only(self):
+        provider = HttpTradingProvider("https://middleware.example", token="reader")
+        payload = {
+            "state": "partial", "as_of": "2026-11-09T08:00:00Z",
+            "account": {"positions": [{"symbol": "USDT", "quantity": "500"}], "truncated": True,
+                        "open_orders": [{"symbol": "ETH/USDT", "quantity": "200"}]},
+            "portfolio": {"positions": [{"symbol": "BTC-usdt", "quantity": "1.25", "cost": "7000"},
+                                        {"symbol": "PEPE/USDT", "quantity": "0.0"}]},
+        }
+        with patch.object(provider._opener, "open", return_value=BytesIO(json.dumps(payload).encode())) as opener:
+            result = provider.holdings("demo")
+        self.assertEqual(opener.call_args.args[0].full_url, "https://middleware.example/accounts/demo/analysis_snapshot")
+        self.assertEqual(result["positions"], [{"symbol": "BTC/USDT", "quantity": "1.25"}])
+        self.assertFalse(result["truncated"])
+        self.assertIs(result["simulated"], False)
+        self.assertEqual(set(result), {"state", "as_of", "positions", "truncated", "simulated"})
+
+    def test_only_the_snapshot_mode_marks_holdings_as_simulated(self):
+        provider = HttpTradingProvider("https://middleware.example", token="reader")
+        payload = {
+            "state": "ok", "as_of": "2026-11-09T08:00:00Z",
+            "portfolio": {"mode": "simulation", "positions": [{"symbol": "BTC/USDT", "quantity": "2"}]},
+        }
+        for mode, expected in (("simulation", True), ("live", False), (True, False), (None, False)):
+            with self.subTest(mode=mode), patch.object(
+                provider._opener, "open", return_value=BytesIO(json.dumps({**payload, "mode": mode}).encode()),
+            ):
+                self.assertIs(provider.holdings("demo")["simulated"], expected)
+
+    def test_partial_portfolio_exposure_uses_only_comparable_valued_positions(self):
+        provider = HttpTradingProvider("https://middleware.example", token="reader")
+        payload = {
+            "state": "partial", "as_of": "2026-11-09T08:00:00Z",
+            "portfolio": {
+                "state": "partial", "valuation_currency": "USDT", "total_assets": None,
+                "positions": [
+                    {"symbol": "BTC/USDT", "quantity": "2", "state": "valued", "market_value": "123.45"},
+                    {"symbol": "ETH/USDT", "quantity": "3", "state": "unvalued", "market_value": None},
+                    {"symbol": "SOL/HKD", "quantity": "4", "state": "valued", "market_value": "900"},
+                    {"symbol": "DOGE/USDT", "quantity": "0", "state": "valued", "market_value": "0"},
+                ],
+                "balances": [{"currency": "USDT", "available": "30"}],
+            },
+        }
+        with patch.object(provider._opener, "open", return_value=BytesIO(json.dumps(payload).encode())) as opener:
+            snapshot = provider.portfolio("demo")
+        opener.assert_called_once()
+        self.assertEqual(snapshot["state"], "partial")
+        self.assertEqual(snapshot["observed_gross_exposure"], "123.45")
+        self.assertIsNone(snapshot["gross_exposure"])
+        self.assertIsNone(snapshot["largest_position"])
+        self.assertEqual([row["symbol"] for row in snapshot["positions"]], ["BTC/USDT", "ETH/USDT", "SOL/HKD"])
+        self.assertIsNone(snapshot["positions"][1]["market_value"])
+        self.assertEqual(snapshot["positions"][2]["quote_currency"], "HKD")
+
     def test_preserves_upstream_truncation_and_rejects_invalid_flag(self):
         provider = HttpTradingProvider("https://middleware.example")
         payload = {"as_of": "2026-11-09T08:00:00Z", "positions": [], "open_orders": [], "truncated": True}
@@ -154,6 +221,53 @@ class HttpTradingProviderTests(unittest.TestCase):
 
 
 class HttpMarketProviderTests(unittest.TestCase):
+    def test_trends_use_the_read_token_and_return_allowlisted_observations(self):
+        provider = HttpMarketProvider("https://middleware.example/api", token="read-token")
+        payload = trend_snapshot()
+        payload["rows"][0]["notes"] = "untrusted instructions"
+        with patch.object(provider._opener, "open", return_value=BytesIO(json.dumps(payload).encode())) as opener:
+            result = provider.trends()
+        request = opener.call_args.args[0]
+        self.assertEqual(request.full_url, "https://middleware.example/api/market/trends")
+        self.assertEqual(request.get_method(), "GET")
+        self.assertEqual(request.get_header("Authorization"), "Bearer read-token")
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(result["rows"][0]["direction"], "up")
+        self.assertEqual(result["rows"][0]["quote_mode"], "public")
+        self.assertNotIn("notes", result["rows"][0])
+
+    def test_empty_single_and_stale_observations_cannot_invent_a_trend(self):
+        provider = HttpMarketProvider("http://localhost:8080/api")
+        empty = {**trend_snapshot(), "status": "empty", "rows": []}
+        single = trend_snapshot()
+        row = single["rows"][0]
+        row.update(source="demo:HashKey", quote_mode="simulation", status="single_sample", sample_count=1,
+                   first_as_of=row["last_as_of"], open="101", low="101", high="101", change_pct=None)
+        for payload, status in ((empty, "empty"), (single, "ok"), (trend_snapshot(age=20), "stale")):
+            with self.subTest(status=status):
+                with patch.object(provider._opener, "open", return_value=BytesIO(json.dumps(payload).encode())):
+                    result = provider.trends()
+                self.assertEqual(result["status"], status)
+                if status in {"empty", "stale"}:
+                    self.assertEqual(result["rows"], [])
+                else:
+                    self.assertEqual(result["rows"][0]["status"], "single_sample")
+                    self.assertIsNone(result["rows"][0]["direction"])
+                    self.assertIsNone(result["rows"][0]["change_pct"])
+
+    def test_trend_source_mode_and_window_validation_fail_safely(self):
+        provider = HttpMarketProvider("http://localhost:8080/api")
+        for overrides in ({"quote_mode": "simulation"}, {"sample_count": 1}, {"change_pct": "-1"}, {"low": "102"}):
+            payload = trend_snapshot()
+            payload["rows"][0].update(overrides)
+            with self.subTest(overrides=overrides):
+                with patch.object(provider._opener, "open", return_value=BytesIO(json.dumps(payload).encode())):
+                    with self.assertRaisesRegex(MarketUnavailable, "invalid trend data"):
+                        provider.trends()
+        with patch.object(provider._opener, "open", side_effect=OSError("private-network-details")):
+            with self.assertRaisesRegex(MarketUnavailable, "upstream is unavailable"):
+                provider.trends()
+
     def test_url_encodes_query_and_keeps_ambiguity_when_limit_is_one(self):
         provider = HttpMarketProvider("https://market.example/v1/", token="example-token")
         payload = {"quotes": [

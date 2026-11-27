@@ -6,24 +6,43 @@ import json
 import re
 import uuid
 
+from .price_history import PriceHistory
 from .store import Store
 from .validation import BusinessError, amount, asset, identifier, iso, number, pair, require, text, timestamp
 
 D = Decimal
 DEFAULT_LIMITS = {"max_order_notional": "100000", "concentration_pct": "60", "loss_pct": "10",
                   "aml_large_trade": "10000", "aml_frequency": 5, "aml_window_seconds": 60}
+PROFILE_DIMENSIONS = frozenset(("FC", "RA", "KE", "BD", "OC"))
 
 
 class MiddleOffice:
-    def __init__(self, db_path, *, clock=None, max_quote_age=120, product_risks=None):
+    def __init__(self, db_path, *, clock=None, max_quote_age=120, product_risks=None, public_sources=(),
+                 suitability_advisory=False, public_source_pairs=None, product_requirements=None,
+                 chart_pairs=None):
         self.store = Store(db_path)
+        self.price_history = PriceHistory(chart_pairs)
         self.clock = clock or (lambda: datetime.now(timezone.utc))
         require(type(max_quote_age) is int and max_quote_age > 0, "invalid_config", "max_quote_age must be positive")
         self.max_quote_age = max_quote_age
+        self.public_sources = frozenset(public_sources)
+        self.market_mode = "public" if any(not source.startswith("demo:") for source in self.public_sources) else "simulation"
+        self.public_source_pairs = public_source_pairs or {}
         self.product_risks = product_risks or {}
+        self.suitability_advisory = suitability_advisory
         require(isinstance(self.product_risks, dict), "invalid_product_risks", "product risk map must be an object")
         require(all(pair(k) == k and type(v) is int and 1 <= v <= 5 for k, v in self.product_risks.items()),
                 "invalid_product_risks", "map normalized pairs to demo risk levels 1-5")
+        self.product_requirements = {} if product_requirements is None else product_requirements
+        require(isinstance(self.product_requirements, dict), "invalid_product_requirements",
+                "product requirements must map normalized pairs to dimension thresholds")
+        require(all(
+            pair(symbol) == symbol and isinstance(requirements, dict)
+            and not requirements.keys() - PROFILE_DIMENSIONS
+            and all(type(threshold) is int and 0 <= threshold <= 100
+                    for threshold in requirements.values())
+            for symbol, requirements in self.product_requirements.items()
+        ), "invalid_product_requirements", "use FC, RA, KE, BD and OC thresholds from 0 to 100")
 
     def _account(self, state, user):
         identifier(user)
@@ -76,6 +95,32 @@ class MiddleOffice:
             self._audit(state, user, "account_created", user)
         return {"user_id": user, "valuation_currency": currency, "balances": cash, "mode": "simulation"}
 
+    def deposit(self, user, payload):
+        identifier(user)
+        require(isinstance(payload, dict) and not payload.keys() - {"amount", "request_id"},
+                "invalid_deposit", "provide amount and request_id")
+        request_id = identifier(payload.get("request_id"), "request_id")
+        credited = amount(number(payload.get("amount"), "amount", positive=True))
+        with self.store.transaction(write=True) as state:
+            account = self._account(state, user)
+            require(account["valuation_currency"] == "USDT", "currency_mismatch",
+                    "simulated top-ups require a USDT account", 409)
+            deposits = state.setdefault("deposits", {})
+            key = user + ":" + request_id
+            previous = deposits.get(key)
+            if previous is not None:
+                require(previous["amount"] == credited, "request_conflict",
+                        "request_id reused with a different top-up amount", 409)
+                return previous.copy()
+            total = number(D(account["balances"].get("USDT", "0")) + D(credited), "USDT balance")
+            available = total - self._reserved(state, user, currency="USDT")
+            receipt = {"deposit_id": "dep_" + uuid.uuid4().hex, "currency": "USDT", "amount": credited,
+                       "total": amount(total), "available": amount(available), "mode": "simulation"}
+            account["balances"]["USDT"] = receipt["total"]
+            deposits[key] = receipt
+            self._audit(state, user, "simulated_deposit", receipt["deposit_id"])
+        return receipt.copy()
+
     def preferences(self, user, payload=None):
         with self.store.transaction(write=payload is not None) as state:
             account = self._account(state, user)
@@ -121,6 +166,11 @@ class MiddleOffice:
                 require(assessment.get("risk_level") == f"C{level}" and assessment.get("product_cap") == f"R{level}",
                         "invalid_level", "C/R levels must agree with upstream RAI")
                 clean = {"dimensions": scores, "rai": rai, "risk_level": f"C{level}", "product_cap": f"R{level}"}
+                confidence = assessment.get("confidence")
+                if confidence is not None:
+                    require(type(confidence) in {int, float} and 0 <= confidence <= 1,
+                            "invalid_confidence", "confidence must be between 0 and 1")
+                    clean["confidence"] = confidence
                 for key in ("flags", "prohibitions"):
                     codes = assessment.get(key, [])
                     require(isinstance(codes, list) and len(codes) <= 16, "invalid_codes", "at most 16 codes")
@@ -144,8 +194,9 @@ class MiddleOffice:
                 require(band is None or isinstance(band, str) and band in {"low", "medium", "high"}, "invalid_band", "invalid wealth_band")
                 if band is not None:
                     record["dimensions"] = {"wealth_band": band}
-                account["assessment"] = record
-                self._audit(state, user, "assessment_updated", user)
+                if account["assessment"] != record:
+                    account["assessment"] = record
+                    self._audit(state, user, "assessment_updated", user)
             require(account["assessment"] is not None, "assessment_not_found", "assessment has not been supplied", 404)
             return account["assessment"]
 
@@ -153,8 +204,15 @@ class MiddleOffice:
         age = ((at or self.clock()) - timestamp(quote["as_of"])).total_seconds()
         return -15 <= age <= self.max_quote_age
 
+    def _visible_quote(self, quote):
+        source, symbol = quote["source"], quote["symbol"]
+        return not self.public_sources or (
+            source in self.public_sources and "timestamp_source" in quote
+            and symbol in self.public_source_pairs.get(source, (symbol,))
+        )
+
     def _quote(self, state, symbol, venue=None, *, at=None):
-        candidates = [q for q in state["quotes"].values() if q["symbol"] == symbol
+        candidates = [q for q in state["quotes"].values() if q["symbol"] == symbol and self._visible_quote(q)
                       and (venue is None or q["source"] == venue) and self._fresh(q, at=at)]
         require(candidates, "quote_unavailable", "no fresh quote for this pair and source", 409)
         # Valuation uses the newest source, with deterministic source tie breaking.
@@ -174,30 +232,46 @@ class MiddleOffice:
             bid = number(raw.get("bid", price), "bid", positive=True)
             ask = number(raw.get("ask", price), "ask", positive=True)
             require(bid <= ask, "crossed_quote", "bid must not exceed ask")
-            fee = number(raw.get("fee_rate", "0"), "fee_rate")
-            require(fee <= D("0.05"), "invalid_fee", "fee_rate must be between 0 and 0.05")
+            raw_fee = raw.get("fee_rate", "0")
+            fee = number(raw_fee, "fee_rate") if raw_fee is not None else None
+            require(fee is None or fee <= D("0.05"), "invalid_fee", "fee_rate must be between 0 and 0.05")
             aliases = raw.get("aliases", [])
             require(isinstance(aliases, list) and len(aliases) <= 16, "invalid_aliases", "at most 16 aliases")
-            clean.append({"symbol": symbol, "source": source, "as_of": iso(as_of), "price": amount(price),
-                          "bid": amount(bid), "ask": amount(ask), "fee_rate": amount(fee),
-                          "name": text(raw.get("name", symbol.split('/')[0]), "name", 80),
-                          "aliases": [text(alias, "alias", 80) for alias in aliases]})
+            quote = {"symbol": symbol, "source": source, "as_of": iso(as_of), "price": amount(price),
+                     "bid": amount(bid), "ask": amount(ask), "fee_rate": amount(fee) if fee is not None else None,
+                     "name": text(raw.get("name", symbol.split('/')[0]), "name", 80),
+                     "aliases": [text(alias, "alias", 80) for alias in aliases]}
+            for field in ("bid_size", "ask_size"):
+                if field in raw:
+                    quote[field] = amount(number(raw[field], field))
+            if "timestamp_source" in raw:
+                origin = raw["timestamp_source"]
+                require(origin in ("exchange", "collected"), "invalid_timestamp_source", "invalid quote timestamp basis")
+                quote["timestamp_source"] = origin
+            clean.append(quote)
+        accepted = []
         with self.store.transaction(write=True) as state:
-            accepted = 0
             for quote in clean:
                 key = quote["symbol"] + "@" + quote["source"]
                 previous = state["quotes"].get(key)
                 if previous and previous["as_of"] >= quote["as_of"]:
                     continue
                 state["quotes"][key] = quote
-                accepted += 1
+                accepted.append(quote)
             # Event-driven full-fill simulation also works after restarting the service.
             for order in list(state["orders"].values()):
                 if order["status"] == "open":
                     self._try_fill(state, order)
             for user in state["accounts"]:
                 self._monitor(state, user)
-            return {"accepted": accepted, "ignored": len(clean) - accepted}
+        self.price_history.record((quote for quote in accepted if self._visible_quote(quote)), self.clock())
+        return {"accepted": len(accepted), "ignored": len(clean) - len(accepted)}
+
+    def price_chart(self, symbol, minutes="5"):
+        return self.price_history.chart(symbol, minutes, self.clock(), self.max_quote_age)
+
+    def market_trends(self):
+        return self.price_history.trends(self.clock(), self.max_quote_age)
 
     def quotes(self, query="", limit=20, *, all_sources=False):
         require(type(limit) is int and 1 <= limit <= 50, "invalid_limit", "limit must be 1-50")
@@ -206,6 +280,8 @@ class MiddleOffice:
         with self.store.transaction() as state:
             matches = []
             for quote in state["quotes"].values():
+                if not self._visible_quote(quote):
+                    continue
                 terms = [quote["symbol"], quote["symbol"].split('/')[0], quote["name"], *quote["aliases"]]
                 if not key or any(key == term.casefold() for term in terms):
                     matches.append({**quote, "freshness": "fresh" if self._fresh(quote) else "stale"})
@@ -221,27 +297,58 @@ class MiddleOffice:
         symbol = pair(symbol)
         qty = number(quantity, "quantity", positive=True)
         require(isinstance(side, str) and side in {"buy", "sell"}, "invalid_side", "side must be buy or sell")
+        currency = symbol.split('/')[1]
+        bid_or_ask = "ask" if side == "buy" else "bid"
         with self.store.transaction() as state:
             venues = []
             excluded = []
             for quote in state["quotes"].values():
-                if quote["symbol"] != symbol:
+                if quote["symbol"] != symbol or not self._visible_quote(quote):
                     continue
                 if not self._fresh(quote):
                     excluded.append(quote["source"])
                     continue
-                price = D(quote["ask"] if side == "buy" else quote["bid"])
+                price = D(quote[bid_or_ask])
                 value = qty * price
-                fee = D(amount(value * D(quote["fee_rate"])))
-                total = D(amount(value)) + fee if side == "buy" else D(amount(value)) - fee
-                venues.append({**quote, "execution_price": amount(price), "fee": amount(fee),
-                               "total": amount(total), "quote_currency": symbol.split('/')[1]})
-            venues.sort(key=lambda q: (D(q["total"]), q["source"]), reverse=side == "sell")
+                rate = quote["fee_rate"]
+                fee = D(amount(value * D(rate))) if rate is not None else None
+                net = amount(D(amount(value)) + (fee if side == "buy" else -fee)) if fee is not None else None
+                size = quote.get(bid_or_ask + "_size")
+                venues.append({**quote, "execution_price": amount(price), "fee": amount(fee) if fee is not None else None,
+                               "total": net, "quote_currency": currency, "notional": amount(value),
+                               "quantity_covered": qty <= D(size) if size is not None else None})
+            expected = {source for source in self.public_sources
+                        if symbol in self.public_source_pairs.get(source, (symbol,))}
+            simulated = not self.public_sources or any(source.startswith("demo:") for source in expected)
+            pre_fee = (self.market_mode == "public" and not simulated) or any(q["fee_rate"] is None for q in venues)
+            if pre_fee:
+                direction = 1 if side == "buy" else -1
+                venues.sort(key=lambda q: (q["quantity_covered"] is False, direction * D(q["execution_price"]), q["source"]))
+            else:
+                venues.sort(key=lambda q: (D(q["total"]), q["source"]), reverse=side == "sell")
+            eligible = [q for q in venues if q["quantity_covered"] is not False]
+            missing = expected - {q["source"] for q in venues} - set(excluded)
             return {"symbol": symbol, "side": side, "quantity": amount(qty), "mode": "simulation",
-                    "venues": venues, "excluded_sources": excluded,
+                    "market_mode": self.market_mode,
+                    "quote_mode": "simulation" if simulated else "public",
+                    "venues": venues, "excluded_sources": sorted(excluded), "missing_sources": sorted(missing),
                     "status": "ok" if len(venues) >= 2 else "insufficient_sources",
-                    "recommended_source": venues[0]["source"] if len(venues) >= 2 else None,
-                    "slippage_model": "none_full_fill_at_bid_ask"}
+                    "recommended_source": eligible[0]["source"] if len(eligible) >= 2 else None,
+                    "ranking_basis": "bid_ask_excluding_fees" if pre_fee else "total_with_fees",
+                    "slippage_model": "top_of_book_only" if self.public_sources else "none_full_fill_at_bid_ask"}
+
+    def market_catalog(self):
+        pairs = {}
+        if not self.public_sources:
+            with self.store.transaction() as state:
+                for quote in sorted(state["quotes"].values(), key=lambda row: (row["symbol"], row["source"])):
+                    if self._visible_quote(quote):
+                        pairs.setdefault(quote["symbol"], []).append(quote["source"])
+            return {"market_mode": "simulation", "pairs": pairs}
+        for source in sorted(self.public_sources):
+            for symbol in self.public_source_pairs.get(source, ()):
+                pairs.setdefault(symbol, []).append(source)
+        return {"market_mode": self.market_mode, "pairs": pairs}
 
     def _reserved(self, state, user, currency=None, symbol=None, exclude=None):
         result = D(0)
@@ -254,9 +361,7 @@ class MiddleOffice:
                 result += D(order["quantity"])
         return result
 
-    def place_order(self, user, payload):
-        identifier(user)
-        request_id = identifier(payload.get("request_id"), "request_id")
+    def _order_terms(self, payload):
         symbol = pair(payload.get("symbol"))
         side = payload.get("side")
         kind = payload.get("order_type", "market")
@@ -267,37 +372,69 @@ class MiddleOffice:
         venue = payload.get("source")
         if venue is not None:
             venue = text(venue, "source", 64)
-        fingerprint = json.dumps([symbol, side, kind, amount(qty), amount(limit) if limit else None, venue])
+        return {"symbol": symbol, "side": side, "order_type": kind, "quantity": amount(qty),
+                "limit_price": amount(limit) if limit else None, "source": venue}
+
+    def _order_quote(self, state, account, terms):
+        warning = self._check_suitability(account, terms)
+        return self._execution_quote(state, terms), warning
+
+    def _check_order(self, state, account, user, terms, quote):
+        qty, side, symbol = D(terms["quantity"]), terms["side"], terms["symbol"]
+        price = D(terms["limit_price"] or quote["ask" if side == "buy" else "bid"])
+        notional = qty * price
+        require(notional >= D("0.00000001"), "order_too_small", "notional is below the ledger precision", 409)
+        require(notional <= D(account["limits"]["max_order_notional"]), "order_limit", "order exceeds configured notional limit", 409)
+        currency = symbol.split('/')[1]
+        fee = D(amount(notional * D(quote["fee_rate"] or "0")))
+        value = D(amount(notional))
+        if side == "buy":
+            total = value + fee
+            available = D(account["balances"].get(currency, "0")) - self._reserved(state, user, currency=currency)
+            require(available >= total, "insufficient_balance", "insufficient available quote currency", 409)
+        else:
+            total = value - fee
+            held = D(account["positions"].get(symbol, {}).get("quantity", "0"))
+            available = held - self._reserved(state, user, symbol=symbol)
+            require(available >= qty, "insufficient_position", "insufficient available position", 409)
+        return {"source": quote["source"], "as_of": quote["as_of"], "fee_rate": quote["fee_rate"],
+                "quote_currency": currency, "reference_price": amount(price),
+                "notional": amount(value), "fee": amount(fee), "total": amount(total),
+                "fee_assumed": quote["fee_rate"] is None}
+
+    def preview_order(self, user, payload):
+        terms = self._order_terms(payload)
+        with self.store.transaction() as state:
+            account = self._account(state, user)
+            quote, warning = self._order_quote(state, account, terms)
+            estimate = self._check_order(state, account, user, terms, quote)
+        if warning:
+            estimate["suitability_warning"] = warning
+        return {**terms, **estimate, "mode": "simulation"}
+
+    def place_order(self, user, payload):
+        identifier(user)
+        request_id = identifier(payload.get("request_id"), "request_id")
+        terms = self._order_terms(payload)
+        fingerprint = json.dumps([terms[key] for key in
+                                  ("symbol", "side", "order_type", "quantity", "limit_price", "source")])
         with self.store.transaction(write=True) as state:
             account = self._account(state, user)
             previous = next((o for o in state["orders"].values() if o["user_id"] == user and o["request_id"] == request_id), None)
             if previous:
                 require(previous["fingerprint"] == fingerprint, "request_conflict", "request_id reused with different input", 409)
                 return self._public_order(previous)
-            order = {"order_id": "ord_" + uuid.uuid4().hex, "user_id": user, "request_id": request_id,
-                     "symbol": symbol, "side": side, "order_type": kind, "quantity": amount(qty),
-                     "limit_price": amount(limit) if limit else None, "source": venue,
+            order = {"order_id": "ord_" + uuid.uuid4().hex, "user_id": user, "request_id": request_id, **terms,
                      "status": "open", "reserved_cash": "0", "reason": None,
                      "fingerprint": fingerprint, "created_at": iso(self.clock()), "updated_at": iso(self.clock())}
             try:
-                self._check_suitability(account, order)
-                quote = self._execution_quote(state, order)
-                order["source"] = quote["source"]
-                order["fee_rate"] = quote["fee_rate"]
-                price = limit or D(quote["ask"] if side == "buy" else quote["bid"])
-                notional = qty * price
-                require(notional >= D("0.00000001"), "order_too_small", "notional is below the ledger precision", 409)
-                require(notional <= D(account["limits"]["max_order_notional"]), "order_limit", "order exceeds configured notional limit", 409)
-                base, currency = symbol.split('/')
-                if side == "buy":
-                    reserve = D(amount(notional)) + D(amount(notional * D(quote["fee_rate"])))
-                    available = D(account["balances"].get(currency, "0")) - self._reserved(state, user, currency=currency)
-                    require(available >= reserve, "insufficient_balance", "insufficient available quote currency", 409)
-                    order["reserved_cash"] = amount(reserve)
-                else:
-                    held = D(account["positions"].get(symbol, {}).get("quantity", "0"))
-                    available = held - self._reserved(state, user, symbol=symbol)
-                    require(available >= qty, "insufficient_position", "insufficient available position", 409)
+                quote, warning = self._order_quote(state, account, terms)
+                order.update(source=quote["source"], fee_rate=quote["fee_rate"] or "0")
+                estimate = self._check_order(state, account, user, terms, quote)
+                if warning:
+                    order["suitability_warning"] = warning
+                if terms["side"] == "buy":
+                    order["reserved_cash"] = estimate["total"]
             except BusinessError as error:
                 order["status"], order["reason"] = "rejected", error.code
             state["orders"][order["order_id"]] = order
@@ -312,23 +449,43 @@ class MiddleOffice:
                 "currency_mismatch", "order quote currency must match account valuation currency", 409)
         if order["side"] != "buy":
             return
-        record = account["assessment"]
-        if record:
-            require(not record["assessment"]["prohibitions"], "assessment_prohibition", "upstream assessment prohibits new buys", 409)
+        assessment = account["assessment"]["assessment"] if account["assessment"] else {}
         risk = self.product_risks.get(order["symbol"])
-        if risk is not None:
-            require(record is not None, "assessment_required", "this configured product requires an assessment", 409)
-            cap = int(record["assessment"]["product_cap"][1])
-            require(risk <= cap, "product_cap", "product exceeds questionnaire risk cap", 409)
+        cap = assessment.get("product_cap")
+        requirements = self.product_requirements.get(order["symbol"], {})
+        scores = assessment.get("dimensions", {})
+        unmet = [code for code, minimum in requirements.items()
+                 if type(scores.get(code)) not in (int, float) or scores[code] < minimum]
+        if assessment.get("prohibitions"):
+            code, message = "assessment_prohibition", "upstream assessment prohibits new buys"
+        elif not assessment and (risk is not None or requirements or self.suitability_advisory):
+            code, message = "assessment_required", "this configured product requires an assessment"
+        elif risk is not None and cap and risk > int(cap[1]):
+            code, message = "product_cap", "product exceeds questionnaire risk cap"
+        elif unmet:
+            code, message = "profile_dimensions", "profile dimensions are below the configured product thresholds"
+        else:
+            return
+        require(self.suitability_advisory, code, message, 409)
+        warning = {"code": code, "risk_level": assessment.get("risk_level"), "product_cap": cap,
+                   "product_risk": f"R{risk}" if risk is not None else None}
+        if code == "profile_dimensions":
+            warning["unmet_dimensions"] = unmet
+        return warning
 
     def _execution_quote(self, state, order):
         candidates = [q for q in state["quotes"].values() if q["symbol"] == order["symbol"]
-                      and (order["source"] is None or q["source"] == order["source"]) and self._fresh(q)]
+                      and self._visible_quote(q) and self._fresh(q)
+                      and (order["source"] is None or q["source"] == order["source"])]
         require(candidates, "quote_unavailable", "no fresh execution quote", 409)
         buy = order["side"] == "buy"
+        if self.public_sources and order["order_type"] == "market":
+            size_key = "ask_size" if buy else "bid_size"
+            candidates = [q for q in candidates if D(q.get(size_key, "0")) >= D(order["quantity"])]
+            require(candidates, "insufficient_top_size", "top of book cannot cover the simulated quantity", 409)
         def total(q):
             px = D(q["ask"] if buy else q["bid"])
-            fee = D(q["fee_rate"])
+            fee = D(q["fee_rate"] or "0")
             return px * (1 + fee if buy else 1 - fee)
         return sorted(candidates, key=lambda q: (total(q) if buy else -total(q), q["source"]))[0]
 
@@ -347,6 +504,8 @@ class MiddleOffice:
         except BusinessError:
             return
         qty = D(order["quantity"])
+        if self.public_sources and qty > D(quote.get("ask_size" if order["side"] == "buy" else "bid_size", "0")):
+            return
         price = D(quote["ask"] if order["side"] == "buy" else quote["bid"])
         limit = D(order["limit_price"]) if order["limit_price"] else None
         if limit and ((order["side"] == "buy" and price > limit) or (order["side"] == "sell" and price < limit)):
@@ -518,7 +677,7 @@ class MiddleOffice:
                 metrics.append({"symbol": symbol, "rule": rule, "value": amount(value),
                                 "threshold": amount(threshold), "breached": value >= threshold})
             reasons = portfolio["reasons"] + (["account_truncated"] if snapshot["truncated"] else [])
-            report = {"schema_version": 1, "user_id": user, "as_of": iso(as_of),
+            report = {"schema_version": 1, "mode": "simulation", "user_id": user, "as_of": iso(as_of),
                       "state": "partial" if reasons else "ok", "reasons": reasons,
                       "account": snapshot, "portfolio": portfolio,
                       "risk": {"state": portfolio["state"], "position_metrics": metrics},

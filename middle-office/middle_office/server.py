@@ -67,9 +67,9 @@ class Handler(BaseHTTPRequestHandler):
         offered = self.headers.get("Authorization", "").encode()
         if self.server.token and hmac.compare_digest(offered, ("Bearer " + self.server.token).encode()):
             return
-        read_path = path == "/api/quotes" or re.fullmatch(r"/api/accounts/[A-Za-z0-9_-]{1,64}/(?:snapshot|analysis_snapshot)", path)
+        read_path = path in {"/api/quotes", "/api/market/trends"} or re.fullmatch(r"/api/accounts/[A-Za-z0-9_-]{1,64}/(?:snapshot|analysis_snapshot)", path)
         if self.server.read_token and hmac.compare_digest(offered, ("Bearer " + self.server.read_token).encode()):
-            require(self.command == "GET" and read_path, "read_only", "AI token only grants quotes and read-only account reports", 403)
+            require(self.command == "GET" and read_path, "read_only", "AI token only grants quotes, trends and read-only account reports", 403)
             return
         require(not self.server.token, "unauthorized", "valid service bearer token required", 401)
 
@@ -77,7 +77,10 @@ class Handler(BaseHTTPRequestHandler):
         url = urlsplit(self.path)
         path, method = unquote(url.path), self.command
         if (method, path) == ("GET", "/health"):
-            return 200, {"status": "ok", "mode": "simulation", "modules": 6, "api_version": 1}
+            feed = getattr(self.server, "public_feed", None)
+            return 200, {"status": "ok", "mode": "simulation", "modules": 6, "api_version": 1,
+                         "market_mode": self.server.office.market_mode,
+                         "public_sources": feed.snapshot() if feed else {}}
         self._authorize(path)
         office = self.server.office
         params = parse_qs(url.query, keep_blank_values=True)
@@ -90,6 +93,12 @@ class Handler(BaseHTTPRequestHandler):
                 return 200, office.quotes(params.get("q", [""])[0], int(limit), all_sources=params.get("all_sources") == ["true"])
         if (method, path) == ("GET", "/api/comparison"):
             return 200, office.comparison(params.get("symbol", [None])[0], params.get("quantity", ["1"])[0], params.get("side", ["buy"])[0])
+        if (method, path) == ("GET", "/api/market/catalog"):
+            return 200, office.market_catalog()
+        if (method, path) == ("GET", "/api/market/history"):
+            return 200, office.price_chart(params.get("symbol", [None])[0], params.get("minutes", ["5"])[0])
+        if (method, path) == ("GET", "/api/market/trends"):
+            return 200, office.market_trends()
         match = re.fullmatch(r"/api/accounts/([A-Za-z0-9_-]{1,64})(?:/(.*))?", path)
         if match:
             user, action = match.groups()
@@ -99,6 +108,11 @@ class Handler(BaseHTTPRequestHandler):
                 return 200, getattr(office, action)(user)
             if method == "PUT" and action in {"preferences", "assessment"}:
                 return 200, getattr(office, action)(user, self._body())
+            if (method, action) == ("POST", "deposits"):
+                require(bool(self.server.token), "unauthorized", "operator bearer token required for simulated top-ups", 401)
+                return 200, office.deposit(user, self._body())
+            if (method, action) == ("POST", "orders/preview"):
+                return 200, office.preview_order(user, self._body())
             if action == "orders":
                 if method == "POST":
                     return 200, office.place_order(user, self._body())
@@ -116,6 +130,8 @@ class Handler(BaseHTTPRequestHandler):
                 require(offset.isascii() and offset.isdigit() and len(offset) <= 8 and limit.isascii()
                         and limit.isdigit() and 1 <= int(limit) <= 500, "invalid_page", "invalid offset or limit")
                 rows = office.records(user, action)
+                if action == "trades" and params.get("sort") == ["newest"]:
+                    rows.reverse()
                 return 200, {action: rows[int(offset):int(offset) + int(limit)], "total": len(rows)}
         raise BusinessError("not_found", "unknown endpoint", 404)
 

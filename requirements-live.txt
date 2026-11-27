@@ -1,0 +1,2 @@
+# Optional client for OSL's unauthenticated public ticker feed.
+websockets==15.0.1

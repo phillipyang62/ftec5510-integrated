@@ -6,6 +6,8 @@ from ipaddress import IPv4Address
 from urllib.parse import parse_qs, unquote, urlsplit
 
 from .assistant import ChatValidationError
+from .models import model_options, session_model
+from .product_matching import LEVEL_THRESHOLDS, POLICY, catalog_products
 from .profiles import ProfileValidationError
 
 
@@ -105,7 +107,7 @@ class ApiHandler(BaseHTTPRequestHandler):
         url = urlsplit(self.path)
         method, path = self.command, url.path
         if (method, path) == ("GET", "/health"):
-            return 200, {"status": "ok", "model_configured": self.server.assistant.model is not None,
+            return 200, {"status": "ok", "model_configured": self.server.assistant.remote_model is not None,
                          "remote_model_configured": self.server.assistant.remote_model is not None,
                          "market_configured": self.server.assistant.market_provider is not None,
                          "trading_configured": self.server.assistant.trading is not None}
@@ -116,6 +118,19 @@ class ApiHandler(BaseHTTPRequestHandler):
             raise ApiError(401, "unauthorized", "valid service bearer token required")
 
         assistant = self.server.assistant
+        if (method, path) == ("GET", "/v1/products"):
+            return 200, {"products": catalog_products(), "policy": POLICY,
+                         "level_thresholds": dict(LEVEL_THRESHOLDS)}
+        if path.startswith("/v1/suitability/") and method == "GET":
+            user_id = require_user_id(unquote(path.removeprefix("/v1/suitability/")))
+            return 200, assistant.suitability(user_id)
+        if path == "/v1/model-settings" and method in {"GET", "PUT"}:
+            if method == "GET":
+                return 200, model_options(assistant.remote_model)
+            if not token:
+                raise ApiError(403, "model_settings_unavailable", "Configure an AI service token for session models")
+            provider, model = self._session_model(self._json_body())
+            return 200, {"provider": provider, "model": model.model if model else None}
         if path.startswith("/v1/profiles/") and method in ("GET", "PUT"):
             user_id = require_user_id(unquote(path.removeprefix("/v1/profiles/")))
             if method == "PUT":
@@ -149,7 +164,30 @@ class ApiHandler(BaseHTTPRequestHandler):
             if not QUOTE_CURRENCY.fullmatch(currency):
                 raise ApiError(400, "invalid_quote_currency", "quote_currency must be a currency code")
             return 200, assistant.risk(user_id, currency.upper())
+        if path.startswith("/v1/education/") and method == "GET":
+            user_id = require_user_id(unquote(path.removeprefix("/v1/education/")))
+            lesson = assistant.education(user_id)
+            if lesson is None:
+                raise ApiError(404, "assessment_required", "Complete the questionnaire for a tailored lesson")
+            return 200, lesson
         if (method, path) == ("POST", "/v1/chat"):
             payload = self._json_body()
-            return 200, assistant.respond(require_user_id(payload.get("user_id")), payload)
+            user_id = require_user_id(payload.get("user_id"))
+            settings = payload.get("model_settings")
+            model = None
+            allow_account_sharing = False
+            if settings is not None and payload.get("action") != "portfolio_snapshot":
+                if not token:
+                    raise ApiError(403, "model_settings_unavailable", "Configure an AI service token for session models")
+                _, model = self._session_model(settings)
+                allow_account_sharing = model is not None and settings.get("allow_account_sharing") is True
+            return 200, assistant.respond(user_id, payload, api_model=model,
+                                          allow_account_sharing=allow_account_sharing)
         raise ApiError(404, "not_found", "unknown endpoint")
+
+    @staticmethod
+    def _session_model(settings):
+        try:
+            return session_model(settings)
+        except ValueError as error:
+            raise ApiError(400, "invalid_model_settings", str(error)) from None
