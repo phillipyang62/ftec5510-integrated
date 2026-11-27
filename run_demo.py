@@ -19,7 +19,7 @@ for module in ("frontend", "middle-office", "ai"):
 from UI import create_server
 from bff import DemoSessions, JsonService
 from ai_mvp.assistant import Assistant
-from ai_mvp.models import from_environment, remote_from_environment
+from ai_mvp.models import remote_from_environment
 from ai_mvp.profiles import ProfileStore
 from ai_mvp.product_catalog import PRODUCTS, order_policies
 from ai_mvp.providers import HttpMarketProvider, HttpTradingProvider, QuoteBook
@@ -80,7 +80,7 @@ def start_server(resources, server):
 
 
 @contextmanager
-def demo_stack(*, ui_port=None, ollama_model=None, enable_deepseek=False, live_market=False, data_dir=None):
+def demo_stack(*, ui_port=None, enable_deepseek=False, live_market=False, data_dir=None):
     with ExitStack() as resources:
         db = Path(data_dir) if data_dir is not None else Path(resources.enter_context(
             TemporaryDirectory(prefix="harbor-invest-")
@@ -110,14 +110,13 @@ def demo_stack(*, ui_port=None, ollama_model=None, enable_deepseek=False, live_m
         market_url = middle_url + "/api"
         assistant = Assistant(
             ProfileStore(db / "profiles.sqlite3"), QuoteBook(),
-            model=from_environment(model_name=ollama_model) if ollama_model else None,
             remote_model=remote_from_environment(enabled=True) if enable_deepseek else None,
             market_provider=HttpMarketProvider(market_url, token=reader, include_venues=True),
             trading=HttpTradingProvider(market_url, token=reader),
             quote_max_age=QUOTE_MAX_AGE if live_market else 120,
         )
         ai_url = start_server(resources, ApiServer(0, assistant, ai_token))
-        ai = JsonService("ai", ai_url, ai_token, timeout=450 if ollama_model or enable_deepseek else 8)
+        ai = JsonService("ai", ai_url, ai_token, timeout=450 if enable_deepseek else 8)
         ui, _ = create_server(DemoSessions(ai, middle, account_seed=account_seed), port=ui_port)
         ui_url = start_server(resources, ui)
         yield middle, ai, reader_client, ui_url
@@ -141,13 +140,12 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--port", type=int, help="UI port. Defaults to the first free port from 5510 to 5529.")
     parser.add_argument("--open-browser", action="store_true", help="open the connected demo in the default browser")
-    parser.add_argument("--ollama-model", help="Installed local Ollama model")
     parser.add_argument("--enable-deepseek", action="store_true", help="Opt in to the API-key model")
     parser.add_argument("--live-market", action="store_true", help="add public spot quotes for other assets")
     parser.add_argument("--data-dir", type=Path, help="reuse a directory for the simulation databases")
     args = parser.parse_args()
     try:
-        with demo_stack(ui_port=args.port, ollama_model=args.ollama_model, enable_deepseek=args.enable_deepseek,
+        with demo_stack(ui_port=args.port, enable_deepseek=args.enable_deepseek,
                         live_market=args.live_market, data_dir=args.data_dir) as stack:
             mode = "public market data, simulated execution" if args.live_market else "offline simulation"
             print(f"Harbor Invest ({mode}): {stack[-1]}/  (Ctrl+C to stop)", flush=True)

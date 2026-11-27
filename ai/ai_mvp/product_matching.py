@@ -97,28 +97,33 @@ def holdings_comparison(positions, assessment):
     return comparisons
 
 
-def holdings_text(account, comparisons, assessment, message, *, include_tips):
+def holdings_text(account, comparisons, assessment, message, *, include_tips, advice=False):
     zh = any("\u4e00" <= char <= "\u9fff" for char in message)
     if account["state"] != "ok":
         return ["当前无法核实持仓。" if zh else "I couldn't verify your current holdings."]
     if not comparisons:
         return ["目前没有可供分析的持仓。" if zh else "There are no current holdings to review."]
 
-    positions = "、".join(f"{row['symbol']} {row['quantity']}" for row in comparisons)
+    positions = ("、" if zh else ", ").join(f"{row['symbol']} {row['quantity']}" for row in comparisons)
     partial = account.get("truncated", False)
     if zh:
         lines = [f"{'部分持仓' if partial else '当前持仓'} · {positions}"]
     else:
         lines = [f"{'Partial holdings' if partial else 'Current holdings'} · {positions}"]
     if assessment is None:
-        lines.append("完成五维测评后，就可以把持仓和你的分数逐项对照。" if zh
-                     else "Complete the five-dimensional assessment to compare your holdings with your scores.")
+        lines.append("这个账户还没有风险测评记录，暂时无法判断持仓与你的风险是否匹配。" if zh
+                     else "This account has no risk assessment to compare with your holdings.")
         return lines
 
     lang = 0 if zh else 1
     risk_level, cap = assessment.risk_level, assessment.product_cap
     lines.append(f"你的风险等级是 {risk_level}，产品上限是 {cap}。" if zh
                  else f"Your risk level is {risk_level}, with a product ceiling of {cap}.")
+    if advice:
+        grades = [f"{row['symbol']} ({row['product_grade']})" for row in comparisons if row["product_grade"]]
+        if grades:
+            lines.append(("产品档位 · " if zh else "Product risk tiers · ") + " · ".join(grades))
+        return lines
     notes, shortfalls = [], set()
     for row in comparisons:
         grade = row["product_grade"]
@@ -144,6 +149,9 @@ def holdings_text(account, comparisons, assessment, message, *, include_tips):
     elif include_tips and any(row["above_cap"] for row in comparisons):
         lines.append("下次先按产品上限筛一轮，再看你能否接受回撤和退出条件。" if zh
                      else "For future decisions, start with your product ceiling, then check drawdown and exit risks.")
+    elif include_tips and all(row["product_grade"] is not None for row in comparisons):
+        focus = min(DIMENSIONS, key=assessment.dimensions.__getitem__)
+        lines.append(HOLDING_TIPS[focus][lang])
     elif include_tips:
         lines.append("下次考虑新币种时，可以先弄清它的主要风险、退出条件和自己能承受的损失。" if zh
                      else "Before considering another asset, check its main risks, exit terms and how much loss you could absorb.")

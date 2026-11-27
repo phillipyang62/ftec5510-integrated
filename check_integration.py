@@ -12,6 +12,7 @@ from urllib.parse import urlencode
 from urllib.request import HTTPCookieProcessor, Request, build_opener, urlopen
 
 from run_demo import ASSESSMENT, demo_stack
+from ai_mvp.providers import HttpTradingProvider
 from middle_office.public_market import EXCHANGE_MARKETS
 from middle_office.simulated_market import SIMULATED_BASES, SIMULATED_SOURCES
 
@@ -53,8 +54,28 @@ def check_html(url):
     with urlopen(url, timeout=5) as page:
         html = page.read()
         assert b'<body data-integrated="true">' in html and b'id="account-login-form"' in html
+        assert b'data-screen-target="questionnaire"' in html and b'id="screen-questionnaire"' in html
+        assert b'id="questionnaire-body"' in html and b'src="./questionnaire.js"' in html
+        assert b'id="guided-lesson"' not in html
+        assert b'id="api-account-sharing"' in html and b'Ollama' not in html
+        assert b'id="holdings-chat-prompt"' in html and b'id="portfolio-snapshot-prompt"' in html
     with urlopen(url + "/integration.js", timeout=5) as script:
-        assert b"/api/assistant/chat" in script.read()
+        integration = script.read().decode("utf-8")
+        assert "/api/assistant/chat" in integration and "harbor-education-requested" not in integration
+        assert "allow_account_sharing" in integration
+        assert "portfolio_advice" in integration and "portfolio_snapshot" in integration
+        assert "查看账户摘要与风险敞口" in integration and "View account summary and risk exposure" in integration
+    with urlopen(url + "/questionnaire.js", timeout=5) as script:
+        questionnaire = script.read().decode("utf-8")
+        assert 'request("/api/questionnaire"' in questionnaire and 'method: "POST"' in questionnaire
+        assert 'request("/api/profile"' in questionnaire and "showResult()" in questionnaire
+        assert all(field in questionnaire for field in (
+            "assessment.rai", "assessment.risk_level", "assessment.product_cap", "assessment.dimensions",
+        ))
+        assert 'label("重新测评", "Retake")' in questionnaire and "answers.clear()" in questionnaire
+        assert all(action not in questionnaire for action in (
+            "查看对应投教", "Open tailored lesson", "View corresponding investor education", "harbor-education-requested",
+        ))
     for private_file in ("/.env.example", "/question-bank.json"):
         try:
             urlopen(url + private_file, timeout=5)
@@ -123,7 +144,7 @@ def check_session_models(url):
     for client in (first, second):
         checked(client, "POST", "/api/session", {"account_name": "student_models"})
     settings_path = "/api/model-settings"
-    default = {"provider": "default", "model": None, "has_api_key": False}
+    default = {"provider": "default", "model": None, "has_api_key": False, "allow_account_sharing": False}
     question = {"message": "Explain what slippage means in one sentence."}
     answer = "Slippage is the change from the expected execution price."
     providers = (
@@ -132,13 +153,14 @@ def check_session_models(url):
         ("gemini", "generativelanguage.googleapis.com", "gemini-3.1-flash-lite"),
     )
     catalog = checked(first, "GET", settings_path)
-    assert catalog["settings"] == default and isinstance(catalog["ollama"]["models"], list)
+    assert catalog["settings"] == default and "ollama" not in catalog
     assert set(catalog["remote_providers"]) == {provider for provider, _, _ in providers}
+    checked(first, "PUT", settings_path, {"provider": "ollama", "model": "fixture:latest"}, expected=400)
     for provider, host, model in providers:
         assert catalog["remote_providers"][provider]["model"] == model
         key = f"fake-{provider}-integration-fixture"
         settings = {"provider": provider, "api_key": key, "allow_billing": True}
-        selected = {"provider": provider, "model": model, "has_api_key": True}
+        selected = {"provider": provider, "model": model, "has_api_key": True, "allow_account_sharing": False}
         with patch("ai_mvp.models.HTTPSConnection") as connect:
             response = connect.return_value.getresponse.return_value
             response.status = 200
@@ -153,6 +175,7 @@ def check_session_models(url):
 
             checked(first, "PUT", settings_path, {**settings, "allow_billing": False}, expected=400)
             checked(first, "PUT", settings_path, {**settings, "api_key": ""}, expected=400)
+            checked(first, "PUT", settings_path, {**settings, "allow_account_sharing": "yes"}, expected=400)
             assert checked(first, "PUT", settings_path, settings) == selected
             assert checked(first, "PUT", settings_path, {**settings, "api_key": ""}) == selected
             assert checked(first, "GET", settings_path)["settings"] == selected
@@ -186,6 +209,31 @@ def check_session_models(url):
             reply = checked(first, "POST", "/api/assistant/chat", {**question, "include_account": True})
             assert reply["generation"] == "model_privacy_blocked" and reply["account"]["state"] == "ok"
             connect.assert_called_once()
+
+            consented = {**selected, "allow_account_sharing": True}
+            assert checked(first, "PUT", settings_path, {**settings, "allow_account_sharing": True}) == consented
+            assert checked(first, "GET", settings_path)["settings"] == consented
+            assert checked(second, "GET", settings_path)["settings"] == default
+            explanation = "The holdings involve volatility and liquidity risks. Review the assessed limits before deciding."
+            if provider == "gemini":
+                response_body["candidates"][0]["content"]["parts"] = [{"text": explanation}]
+            else:
+                response_body["choices"][0]["message"]["content"] = explanation
+            response.read.return_value = json.dumps(response_body).encode("utf-8")
+            shared = checked(first, "POST", "/api/assistant/chat", {**question, "include_account": True})
+            assert shared["generation"] == "remote_model" and shared["account"]["state"] == "ok"
+            assert explanation in shared["reply"] and connect.call_count == 2
+
+            assert checked(first, "PUT", settings_path, {**settings, "allow_account_sharing": False}) == selected
+            blocked = checked(first, "POST", "/api/assistant/chat", {
+                **question, "include_account": True, "allow_account_sharing": True,
+                "model_settings": {**settings, "allow_account_sharing": True},
+            })
+            assert blocked["generation"] == "model_privacy_blocked" and connect.call_count == 2
+            blocked_history = checked(first, "POST", "/api/assistant/chat", {
+                **question, "history": [{"role": "user", "content": "Review my holdings."}],
+            })
+            assert blocked_history["generation"] == "model_privacy_blocked" and connect.call_count == 2
 
             response.status = 401
             response.read.return_value = json.dumps({"error": {"message": f"Invalid key {key}"}}).encode()
@@ -437,6 +485,219 @@ def check_preset_accounts(url):
     assert checked(ui, "GET", history_path) == empty_history
 
 
+def check_low_risk_holdings_context(url):
+    ui = BrowserClient(url)
+    checked(ui, "POST", "/api/session", {"account_name": "demo_low_risk"})
+    profile = checked(ui, "GET", "/api/profile")
+    scores = dict.fromkeys(("FC", "RA", "KE", "BD", "OC"), 20)
+    assert profile["source"] == "demo_preset" and profile["wealth_band"] == "high"
+    assert profile["assessment"]["dimensions"] == scores
+    assert (profile["assessment"]["rai"], profile["assessment"]["risk_level"],
+            profile["assessment"]["product_cap"]) == (20, "C1", "R1")
+    before = checked(ui, "GET", "/api/account/summary")
+    assert before["portfolio"]["state"] == "ok"
+    assert before["portfolio"]["balances"] == [
+        {"currency": "USDT", "total": "1000", "reserved": "0", "available": "1000"},
+    ]
+    holdings = {"BTC/USDT": ("2", "65000"), "ETH/USDT": ("25", "2000")}
+    positions = {row["symbol"]: row for row in before["portfolio"]["positions"]}
+    assert positions.keys() == holdings.keys()
+    for symbol, (quantity, average_cost) in holdings.items():
+        row = positions[symbol]
+        assert row["quantity"] == quantity and row["average_cost"] == average_cost
+        assert row["state"] == "valued" and row["source"] in SIMULATED_SOURCES
+        assert Decimal(row["market_value"]) > 0
+    empty_history = {"trades": [], "total": 0}
+    assert checked(ui, "GET", "/api/orders")["orders"] == []
+    assert checked(ui, "GET", "/api/account/transactions") == empty_history
+
+    examples = (
+        ("基于我目前的持仓和风险测评结果，你有什么建议？",
+         "这些持仓可能带来的波动与回撤超出了当前测评所支持的范围。建议您目前阶段先了解更多相关知识，再比较波动更低、资金期限合适的产品。"),
+        ("Based on my current holdings and risk assessment, what would you suggest?",
+         "These holdings involve volatility and drawdown beyond the assessed limits. Build your knowledge before comparing lower-volatility products that fit your time horizon."),
+    )
+    english_seed = (
+        "The potential volatility and drawdowns of these holdings exceed the range supported by your current assessment. "
+        "For now, start by learning more about how these products work and the risks involved. "
+        "Then compare lower-volatility products that fit your investment time horizon."
+    )
+    key = "fixture-low-risk-report"
+    with patch("ai_mvp.models.HTTPSConnection") as connect:
+        response = connect.return_value.getresponse.return_value
+        response.status = 200
+        settings = checked(ui, "PUT", "/api/model-settings", {
+            "provider": "deepseek", "api_key": key, "allow_billing": True, "allow_account_sharing": True,
+        })
+        assert settings == {"provider": "deepseek", "model": "deepseek-flash", "has_api_key": True,
+                            "allow_account_sharing": True}
+        for index, (message, explanation) in enumerate(examples, 1):
+            response.read.return_value = json.dumps({
+                "choices": [{"message": {"content": explanation}, "finish_reason": "stop"}],
+            }).encode("utf-8")
+            reply = checked(ui, "POST", "/api/assistant/chat", {"message": message, "action": "portfolio_advice"})
+            assert connect.call_count == index and connect.call_args.args == ("api.deepseek.com", 443)
+            call = connect.return_value.request.call_args
+            assert call.args == ("POST", "/v1/chat/completions")
+            sent = json.loads(call.kwargs["body"])
+            assert key not in json.dumps(sent) and call.kwargs["headers"]["Authorization"] == f"Bearer {key}"
+            assert sent["messages"][1]["content"] == message
+            system = sent["messages"][0]["content"]
+            if index == 1:
+                assert "语气示例（仅在事实符合时参考）" in system and examples[0][1] in system
+                assert "Example wording (only when the facts support it)" not in system
+            else:
+                assert "Example wording (only when the facts support it)" in system and english_seed in system
+                prefix = system.split("\n本轮上下文\n", 1)[0]
+                assert not any("\u4e00" <= character <= "\u9fff" for character in prefix)
+            prompt = json.loads(system.split("\n本轮上下文\n", 1)[1])
+
+            assert reply["generation"] == "remote_model" and reply["model_name"] == "deepseek-flash"
+            assert reply["mode"] == "education" and reply["product_cap"] == "R1"
+            assert reply["account"]["state"] == "ok" and "open_orders" not in reply["account"]
+            assert {row["symbol"]: row["quantity"] for row in reply["account"]["positions"]} == {
+                symbol: values[0] for symbol, values in holdings.items()
+            }
+            assert prompt["profile"]["assessment"]["dimensions"] == scores
+            assert prompt["profile"]["assessment"]["product_cap"] == "R1"
+            assert prompt["account_state"] == "ok" and prompt["account"]["partial"] is False
+            assert "user_id" not in prompt["account"] and "raw_answers" not in prompt["profile"]
+            compared = {row["symbol"]: row for row in prompt["account"]["positions"]}
+            assert compared.keys() == holdings.keys()
+            assert reply["holdings_comparison"] == prompt["account"]["positions"]
+            for symbol, row in compared.items():
+                assert row["quantity"] == holdings[symbol][0] and row["above_cap"] is True
+                assert row["product_grade"] == {"BTC/USDT": "R4", "ETH/USDT": "R3"}[symbol]
+                assert {gap["code"] for gap in row["unmet_dimensions"]} == scores.keys()
+                assert all(gap["score"] == 20 and gap["minimum"] > 20 for gap in row["unmet_dimensions"])
+
+            assert prompt["market_requested"] is True and reply["market_requested"] is True
+            quotes = {row["symbol"]: row for row in prompt["market_quotes"]}
+            assert quotes.keys() == holdings.keys() and len(reply["market"]) == len(holdings)
+            for result in reply["market"]:
+                assert result["status"] == "exact" and len(result["matches"]) == 1
+                matched = result["matches"][0]
+                quote = quotes[matched["symbol"]]
+                assert matched["freshness"] == "fresh" and matched["source"] in SIMULATED_SOURCES
+                assert quote["source"] == matched["source"] and quote["demo"] is True
+                assert quote["price"] == matched["price"] and quote["as_of"] == matched["as_of"]
+                observed = datetime.fromisoformat(quote["as_of"].replace("Z", "+00:00"))
+                assert 0 <= (datetime.now(observed.tzinfo) - observed).total_seconds() <= 10
+                assert Decimal(quote["price"]) > 0
+            assert reply["reply"].startswith("当前持仓" if index == 1 else "Current holdings")
+            assert ("最新模拟报价" if index == 1 else "Latest simulated quote") in reply["reply"]
+            assert explanation in reply["reply"] and all(symbol in reply["reply"] for symbol in holdings)
+
+        response.status = 503
+        response.read.return_value = b'{"error":{"message":"fixture-unavailable"}}'
+        unavailable = checked(ui, "POST", "/api/assistant/chat", {"message": examples[0][0]})
+        assert unavailable["generation"] == "model_unavailable" and "model_name" not in unavailable
+        assert all(text not in unavailable["reply"] for _, text in examples)
+        assert "fixture-unavailable" not in unavailable["reply"]
+        assert unavailable["reply"].startswith("当前持仓") and "最新模拟报价" in unavailable["reply"]
+        response.status = 200
+        invalid = "These holdings will earn 20%."
+        response.read.return_value = json.dumps({
+            "choices": [{"message": {"content": invalid}, "finish_reason": "stop"}],
+        }).encode("utf-8")
+        guarded = checked(ui, "POST", "/api/assistant/chat", {"message": examples[1][0]})
+        assert guarded["generation"] == "policy_guard" and invalid not in guarded["reply"]
+        assert all(text not in guarded["reply"] for _, text in examples)
+        assert guarded["reply"].startswith("Current holdings") and "Latest simulated quote" in guarded["reply"]
+        reply_in_chinese = examples[0][1]
+        response.read.return_value = json.dumps({
+            "choices": [{"message": {"content": reply_in_chinese}, "finish_reason": "stop"}],
+        }).encode("utf-8")
+        mismatch = checked(ui, "POST", "/api/assistant/chat", {"message": examples[1][0]})
+        assert mismatch["generation"] == "policy_guard"
+        assert mismatch["model_status"]["code"] == "response_language_mismatch"
+        assert reply_in_chinese not in mismatch["reply"] and "model_name" not in mismatch
+        assert not any("\u4e00" <= character <= "\u9fff" for character in mismatch["reply"])
+        assert mismatch["reply"].startswith("Current holdings") and "Latest simulated quote" in mismatch["reply"]
+    assert checked(ui, "GET", "/api/orders")["orders"] == []
+    assert checked(ui, "GET", "/api/account/transactions") == empty_history
+    assert checked(ui, "GET", "/api/account/summary")["portfolio"]["balances"] == before["portfolio"]["balances"]
+
+
+def check_portfolio_snapshot_actions(url):
+    ui = BrowserClient(url)
+    checked(ui, "POST", "/api/session", {"account_name": "demo_low_risk"})
+    expected_holdings = {"BTC/USDT": "2", "ETH/USDT": "25"}
+    messages = (
+        ("查看账户摘要与风险敞口", "当前持仓", "风险敞口", "可用余额"),
+        ("View account summary and risk exposure", "Current holdings", "Risk exposure", "Available balance"),
+    )
+    observed = []
+    original_read = HttpTradingProvider._read_snapshot
+
+    def read_snapshot(provider, user_id, endpoint, normalize):
+        assert user_id == "demo_low_risk" and endpoint == "analysis_snapshot"
+
+        def capture(payload):
+            observed.append(payload)
+            return normalize(payload)
+
+        return original_read(provider, user_id, endpoint, capture)
+
+    with patch("ai_mvp.models.HTTPSConnection") as vendor, patch.object(
+        HttpTradingProvider, "_read_snapshot", autospec=True, side_effect=read_snapshot,
+    ):
+        for sharing in (False, True):
+            settings = checked(ui, "PUT", "/api/model-settings", {
+                "provider": "deepseek", "api_key": "fixture-snapshot-never-sent",
+                "allow_billing": True, "allow_account_sharing": sharing,
+            })
+            assert settings["allow_account_sharing"] is sharing
+            for message, heading, exposure_heading, balance_label in messages:
+                reads_before = len(observed)
+                result = checked(ui, "POST", "/api/assistant/chat", {
+                    "action": "portfolio_snapshot", "message": message,
+                    "history": [{"role": "user", "content": "Review my holdings."}], "market_queries": [],
+                })
+                vendor.assert_not_called()
+                assert len(observed) == reads_before + 1
+                raw = observed[-1]
+                assert raw["state"] == "ok" and raw["mode"] == "simulation" and raw["snapshot_id"]
+                portfolio = raw["portfolio"]
+                snapshot = result["portfolio_snapshot"]
+                assert result["generation"] == "account_snapshot" and "model_name" not in result
+                assert result["reply"].startswith(heading) and exposure_heading in result["reply"]
+                assert balance_label in result["reply"]
+                assert snapshot["state"] == "ok" and snapshot["as_of"] == raw["as_of"]
+                assert snapshot["valuation_currency"] == portfolio["valuation_currency"] == "USDT"
+                assert snapshot["total_assets"] == portfolio["total_assets"]
+                rows = {row["symbol"]: row for row in snapshot["positions"]}
+                actual = {row["symbol"]: row for row in portfolio["positions"]}
+                assert rows.keys() == actual.keys() == expected_holdings.keys()
+                for symbol, row in rows.items():
+                    assert row["quantity"] == actual[symbol]["quantity"] == expected_holdings[symbol]
+                    assert row["market_value"] == actual[symbol]["market_value"]
+                    assert row["quote_currency"] == "USDT" and actual[symbol]["source"] in SIMULATED_SOURCES
+                assert snapshot["balances"] == [
+                    {"currency": row["currency"], "available": row["available"]} for row in portfolio["balances"]
+                ]
+                gross = sum(abs(Decimal(row["market_value"])) for row in portfolio["positions"])
+                assert Decimal(snapshot["gross_exposure"]) == Decimal(snapshot["observed_gross_exposure"]) == gross
+                concentration = max(
+                    (row for row in raw["risk"]["position_metrics"] if row["rule"] == "concentration_pct"),
+                    key=lambda row: Decimal(row["value"]),
+                )
+                assert snapshot["largest_position"] == {
+                    "symbol": concentration["symbol"], "concentration_pct": concentration["value"],
+                }
+                visible = result["reply"].replace(",", "")
+                assert snapshot["gross_exposure"] in visible
+                assert f"{Decimal(concentration['value']):.2f}%" in visible
+                assert all(row["available"] in visible for row in snapshot["balances"])
+                assert all(row["market_value"] in visible and symbol in visible for symbol, row in rows.items())
+        checked(ui, "POST", "/api/assistant/chat", {
+            "action": "unknown_portfolio_action", "message": "View my account.",
+        }, expected=400)
+        vendor.assert_not_called()
+    assert checked(ui, "GET", "/api/orders")["orders"] == []
+    assert checked(ui, "GET", "/api/account/transactions") == {"trades": [], "total": 0}
+
+
 def check_asset_matching_and_orders(url):
     ui = BrowserClient(url)
     checked(ui, "POST", "/api/session", {"account_name": "demo_c1"})
@@ -563,14 +824,20 @@ def offline_checks():
         check_preset_accounts(url)
         print("PASS five preset assessments, starting holdings, and histories populated only by fills")
 
+        check_low_risk_holdings_context(url)
+        print("PASS consented API prompts receive low-risk holdings and matched quotes in Chinese and English")
+
+        check_portfolio_snapshot_actions(url)
+        print("PASS bilingual snapshot actions reuse authoritative values and bypass vendors with sharing on or off")
+
         check_deposits(url)
         print("PASS simulated USDT top-ups, exact balance, session isolation, idempotency and unchanged history")
 
         check_session_models(url)
-        print("PASS mocked DeepSeek, OpenAI and Gemini calls, consent, provider key isolation and account privacy")
+        print("PASS mocked vendor calls, separate billing/account consent, revocation and session key isolation")
 
         check_recent_market_context(url, reader)
-        print("PASS collected Python simulator samples reach the mocked model through the read-only ten-second API")
+        print("PASS real Python simulator samples for all ten assets reach the mocked model's ten-second context")
 
         questionnaire_form(ui, middle, ai)
         print("PASS questionnaire, example RAI 61/C3/R3, risk caps and profile-based education")

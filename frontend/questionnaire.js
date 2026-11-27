@@ -398,10 +398,6 @@
     const actions = document.createElement("div");
     actions.className = "da-question-actions";
     actions.append(
-      button(label("查看对应投教", "Open tailored lesson"), "da-primary", () => {
-        find('[data-screen-target="assistant"]').click();
-        document.dispatchEvent(new Event("harbor-education-requested"));
-      }),
       button(label("重新测评", "Retake"), "da-secondary", () => {
         result = null;
         answers.clear();

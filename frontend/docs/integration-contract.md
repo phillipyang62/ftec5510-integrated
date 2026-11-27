@@ -107,14 +107,21 @@ trace_id
 
 生成模型成功时还返回 `model_name`。普通对话返回 `model_status`，包含 `state`、`code`、平台、模型、是否可重试和中英文提示。调用失败时前端显示具体错误，`reply` 仍可包含已核实的行情和账户数据。测评与资产匹配由规则生成。
 
-聊天中询问个人持仓或传入 `include_account: true` 会读取中台分析快照中的持仓列表。`account.positions` 返回完整交易对和数量，`holdings_comparison` 另给每项产品的档位、是否超出上限及未达标的维度分数和门槛。未收录的交易对的产品档位为 `null`。持仓风险分析在本机处理。
+聊天中询问个人持仓或传入 `include_account: true` 会读取中台分析快照中的持仓列表。`account.positions` 返回完整交易对和数量，`holdings_comparison` 另给每项产品的档位、是否超出上限及未达标的维度分数和门槛。未收录的交易对的产品档位为 `null`。风险建议使用会话已授权的 API 生成，持仓与档位来自中台和后端测评规则。
+
+请求持仓建议时，AI 会按已核实的持仓交易对自动查询最新报价，最多查询五个交易对。回复依次显示持仓、可用报价与测评建议。报价来自中台，模拟行情会标注来源和时间。
+
+快捷按钮在聊天请求中附带 `action`，问题的语言决定回复语言。
+
+- `portfolio_advice` 请求持仓测评建议，使用会话已授权的模型 API。
+- `portfolio_snapshot` 读取中台同一份账户分析快照，直接生成摘要并返回 `generation: "account_snapshot"` 和 `portfolio_snapshot`。摘要包含非零持仓、可用余额和持仓总市值。最大单项持仓的占比以含现金的账户总资产为分母。估值不完整时仅显示可核实的部分。此操作无需模型配置。
 
 ### 模型设置
 
-- `GET /api/model-settings` 返回 `ollama.models`、`remote_providers`、启动时配置和当前会话的 `settings`（`provider`、`model`、`has_api_key`）。`remote_providers` 按平台 ID 返回 `name` 和默认 `model`。
-- `PUT /api/model-settings` 接收 `{"provider":"default"}`、`{"provider":"ollama","model":"qwen3.5:9b-q4_K_M"}`，或 `{"provider":"openai","api_key":"<用户填写>","allow_billing":true}`。API 平台 ID 为 `deepseek`、`openai`、`gemini`。同一会话、同一平台可留空以沿用当前 Key，换平台须填该平台的 Key。成功时返回脱敏的设置。
+- `GET /api/model-settings` 返回 `remote_providers`、`startup.remote` 和当前会话的 `settings`（`provider`、`model`、`has_api_key`、`allow_account_sharing`）。`remote_providers` 按平台 ID 返回 `name` 和默认 `model`。
+- `PUT /api/model-settings` 接收 `{"provider":"default"}`，或 `{"provider":"deepseek","api_key":"<用户填写>","allow_billing":true,"allow_account_sharing":true}`。API 平台 ID 为 `deepseek`、`openai`、`gemini`。同一会话、同一平台可留空以沿用当前 Key，换平台须填该平台的 Key。`allow_account_sharing` 默认关闭。成功时返回脱敏的设置。
 - BFF 使用服务令牌调用 `GET/PUT /v1/model-settings` 查询目录和校验配置。Key 只驻留当前 BFF 会话内存。AI 服务通过本机 HTTP 或 HTTPS 接收 Key，并按平台固定使用官方 API。只有聊天生成才向所选平台发请求，返回的模型设置不包含 Key。
-- BFF 给 `POST /v1/chat` 附加本次登录的 `model_settings`，忽略浏览器自行提交的同名字段。涉及账户上下文时绕过远程生成。会话注销、过期或切换时需要重新配置。
+- BFF 给 `POST /v1/chat` 附加本次登录的 `model_settings`，忽略浏览器自行提交的同名字段。API 模型接收模拟持仓上下文的条件是用户在当前会话授权分享，并且中台快照标记 `mode: "simulation"`。发送内容涵盖本轮问题、模拟交易对及数量、派生测评和行情。余额、挂单和历史对话留在联调服务内。会话注销、过期或切换时需要重新配置。
 
 ### 风险
 
@@ -132,7 +139,7 @@ GET /v1/risk/{user_id}?quote_currency=USDT
 
 ## 3. 行情边界
 
-`GET /api/market/catalog` 由 BFF 转发给中台，返回 `market_mode` 和 `pairs`。`pairs` 的键是交易对，值是其报价来源数组。公开模式列出已配置来源，离线模式列出模拟报价来源。前端使用目录生成币种和计价币选项，具体报价及可用状态来自 `GET /api/market/venues`。公开模式下 BTC/ETH 的模拟来源以 `demo:MDGateway:` 开头，提交订单预览时应使用完整来源标识。`quote_mode` 区分模拟报价（`simulation`）与公开现货报价（`public`）。
+`GET /api/market/catalog` 由 BFF 转发给中台，返回 `market_mode` 和 `pairs`。`pairs` 的键是交易对，值是其报价来源数组。前端使用目录生成币种和计价币选项，具体报价及可用状态来自 `GET /api/market/venues`。十种动态模拟币种的来源以 `demo:MDGateway:` 开头，提交订单预览时应使用完整来源标识。`quote_mode` 表示该交易对使用的报价类型，`simulation` 为模拟报价，`public` 为公开现货报价。
 
 AI 后端的 `/v1/market/quotes` 是单交易对参考价：
 
@@ -175,7 +182,7 @@ GET /api/market/venues?symbol=BTC%2FUSDT&quantity=0.5&side=buy
 
 如果未来 AI 后端要支持多平台报价，内部行情键必须从单一 `symbol` 扩展为 `(venue, symbol)`；否则同一交易对来自不同平台时会互相覆盖。
 
-模拟下单页每 10 秒读取 `GET /api/market/history?symbol=BTC%2FUSDT&minutes=5`。接口需登录，一键联调时支持币种目录中的 13 个 USDT 交易对，回看范围为 1、5、10、15 分钟。每个报价来源独立按 UTC 的 10 秒时段聚合 `price`，返回 `candles`，每条含 `start`、`open`、`high`、`low`、`close`。响应同时包含区间 `start` 和 `end`（右端点不含）、`source`、`simulated`、最新报价时间 `as_of` 和状态 `live`、`stale` 或 `empty`。图表为每个交易对显示单一来源。混合行情下，BTC 和 ETH 优先使用 HashKey 模拟源，其余币种使用公开报价。缺少新鲜首选报价时切换到同一交易对的可用来源。历史自中台启动后积累，缺报价的时段留空。
+模拟下单页每 10 秒读取 `GET /api/market/history?symbol=BTC%2FUSDT&minutes=5`。接口需登录，一键联调时支持币种目录中的 13 个 USDT 交易对，回看范围为 1、5、10、15 分钟。每个报价来源独立按 UTC 的 10 秒时段聚合 `price`，返回 `candles`，每条含 `start`、`open`、`high`、`low`、`close`。响应同时包含区间 `start` 和 `end`（右端点不含）、`source`、`simulated`、最新报价时间 `as_of` 和状态 `live`、`stale` 或 `empty`。图表为每个交易对显示单一来源，动态模拟币种优先使用 HashKey 模拟源。缺少新鲜首选报价时切换到同一交易对的可用来源。历史自中台启动后积累，缺报价的时段留空。
 
 ## 4. 订单边界
 

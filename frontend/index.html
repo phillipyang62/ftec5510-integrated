@@ -106,13 +106,6 @@
     .da-assessment-summary dd { margin: 3px 0 0; font-size: 20px; font-weight: 650; }
     .da-assessment-details { color: var(--da-muted); font-size: 13px; }
     .da-assessment-details summary { cursor: pointer; width: fit-content; }
-    .da-learning { display: grid; gap: 10px; padding: 18px; margin-bottom: 12px; }
-    .da-learning[hidden] { display: none; }
-    .da-learning h2, .da-learning p { margin: 0; }
-    .da-learning-focus { color: var(--da-muted); font-size: 13px; }
-    .da-learning-actions { display: flex; flex-wrap: wrap; gap: 8px; }
-    body[data-integrated] .da-messages { min-height: 0; }
-    body[data-integrated] .da-messages:empty { display: none; }
     body[data-integrated] .da-precheck span { font-size: 12px; }
     body[data-integrated] .da-field-row:has(.da-field[hidden]) { grid-template-columns: minmax(0, 1fr); }
     body[data-integrated] #digital-asset-ui .da-primary,
@@ -549,17 +542,6 @@
           <h1 id="assistant-title">聊天助手</h1>
         </div>
 
-        <section class="da-panel da-learning" id="guided-lesson" aria-labelledby="lesson-title" hidden>
-          <h2 id="lesson-title" tabindex="-1">投教</h2>
-          <p class="da-learning-focus" id="lesson-focus" hidden></p>
-          <p id="lesson-content" role="status"></p>
-          <ul id="lesson-assets" class="da-lesson-assets" hidden></ul>
-          <div class="da-learning-actions">
-            <button class="da-primary" type="button" id="lesson-trade" hidden>打开模拟下单页</button>
-            <button class="da-secondary" type="button" id="lesson-retry" hidden>重试加载投教</button>
-          </div>
-        </section>
-
         <div class="da-chat-layout">
           <article class="da-panel da-chat">
             <div class="da-chathead">
@@ -579,19 +561,18 @@
                 <h2 id="model-settings-title">模型设置</h2>
                 <label for="model-provider">模型来源</label>
                 <select id="model-provider" autofocus>
-                  <option value="default">启动时配置</option>
-                  <option value="ollama">本地 Ollama</option>
+                  <option value="default">启动时 API 配置</option>
                 </select>
-                <div id="ollama-fields" class="da-model-fields" hidden>
-                  <label for="ollama-model">已安装模型</label>
-                  <select id="ollama-model"></select>
-                </div>
                 <div id="api-model-fields" class="da-model-fields" hidden>
                   <label id="api-key-label" for="api-model-key">API Key</label>
                   <input id="api-model-key" type="password" maxlength="512" autocomplete="off" spellcheck="false">
                   <label class="da-model-consent">
                     <input id="api-model-agree" type="checkbox">
                     <span id="api-model-consent"></span>
+                  </label>
+                  <label class="da-model-consent">
+                    <input id="api-account-sharing" type="checkbox">
+                    <span id="api-account-sharing-consent"></span>
                   </label>
                 </div>
                 <p id="model-settings-status" role="status"></p>
@@ -604,6 +585,10 @@
 
             <div class="da-messages" aria-live="polite"></div>
 
+            <div class="da-prompts">
+              <button id="holdings-chat-prompt" type="button">基于我目前的持仓和风险测评结果，你有什么建议？</button>
+              <button id="portfolio-snapshot-prompt" type="button">查看账户摘要与风险敞口</button>
+            </div>
             <form class="da-composer" id="assistant-form">
               <label class="sr-only" for="assistant-input">向聊天助手提问</label>
               <textarea id="assistant-input" rows="2" placeholder="询问产品、费用、市场概念或监管规则…"></textarea>
@@ -2013,10 +1998,14 @@
   }
 
   .da-chat {
+    height: clamp(360px, calc(100dvh - 240px), 900px);
+    display: flex;
+    flex-direction: column;
     overflow: hidden;
   }
 
   .da-chathead {
+    flex: 0 0 auto;
     gap: 10px;
     padding: 13px 15px;
     border-bottom: 1px solid var(--da-line);
@@ -2099,12 +2088,16 @@
   }
 
   .da-messages {
-    min-height: 390px;
+    flex: 1 1 auto;
+    min-height: 0;
     padding: 18px;
     display: grid;
     align-content: start;
     gap: 18px;
     background: var(--da-surface-2);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-gutter: stable;
   }
 
   .da-message {
@@ -2235,6 +2228,7 @@
   }
 
   .da-prompts {
+    flex: 0 0 auto;
     padding: 10px 15px 0;
     display: flex;
     flex-wrap: wrap;
@@ -2248,7 +2242,7 @@
     border-radius: 999px;
     background: var(--da-surface);
     color: var(--da-muted);
-    font-size: 8px;
+    font-size: 11px;
   }
 
   .da-prompts button:hover {
@@ -2256,8 +2250,11 @@
     color: var(--da-brand-strong);
   }
 
+  .da-prompts button:disabled { opacity: .55; cursor: wait; }
+
   .da-composer {
-    margin: 10px 15px 0;
+    flex: 0 0 auto;
+    margin: 10px 15px 15px;
     padding: 7px 7px 7px 11px;
     display: flex;
     align-items: flex-end;
@@ -2274,6 +2271,7 @@
   .da-composer textarea {
     width: 100%;
     min-height: 36px;
+    max-height: min(160px, 25dvh);
     resize: vertical;
     border: 0;
     outline: 0;
@@ -2756,15 +2754,6 @@
 
     .da-message-ai .da-assistant-avatar {
       display: none;
-    }
-
-    .da-prompts {
-      flex-wrap: nowrap;
-      overflow-x: auto;
-    }
-
-    .da-prompts button {
-      flex: 0 0 auto;
     }
 
     .da-chart-legend {
@@ -3702,14 +3691,6 @@
     color: var(--da-muted);
   }
 
-  .da-lesson-assets {
-    display: grid;
-    gap: 6px;
-    margin: 0;
-    padding-left: 20px;
-    color: var(--da-muted);
-  }
-
   .da-watchfoot {
     justify-content: flex-end;
     padding: 10px 12px;
@@ -3961,8 +3942,7 @@
 
 
   .da-composer,
-  .da-context-card,
-  .da-learning {
+  .da-context-card {
     border-color: #e8ebff;
   }
 
@@ -4273,9 +4253,7 @@
       "成交时间（UTC）": "Execution time (UTC)",
       "模型设置": "Model settings",
       "模型来源": "Model source",
-      "启动时配置": "Startup defaults",
-      "本地 Ollama": "Local Ollama",
-      "已安装模型": "Installed model",
+      "启动时 API 配置": "Startup API configuration",
       "关闭": "Close",
       "保存模型设置": "Save model settings"
     });

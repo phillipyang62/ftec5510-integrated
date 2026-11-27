@@ -65,16 +65,16 @@ def run(port, require_model):
     if require_model:
         result = request("POST", "/v1/chat", {"user_id": "demo-learner", "message": "什么是流动性？请用一句话解释。"})
         print(json.dumps({"generation": result["generation"], "reply": result["reply"]}, ensure_ascii=False), flush=True)
-        if result["generation"] != "local_model":
-            raise RuntimeError("expected a real local model reply")
+        if result["generation"] != "remote_model":
+            raise RuntimeError("expected a provider API reply")
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--port", type=int, default=8000)
-    parser.add_argument("--require-local-model", action="store_true")
+    parser.add_argument("--require-api-model", action="store_true")
     args = parser.parse_args()
-    run(args.port, args.require_local_model)
+    run(args.port, args.require_api_model)
 
 
 if __name__ == "__main__":

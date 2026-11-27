@@ -6,9 +6,7 @@ from unittest.mock import Mock, patch
 
 from ai_mvp.models import (
     ModelUnavailable,
-    OllamaModel,
     OpenAICompatibleModel,
-    from_environment,
     remote_from_environment,
     session_model,
 )
@@ -22,55 +20,20 @@ def connection_returning(data: dict, status: int = 200) -> Mock:
     return connection
 
 
-class OllamaModelTests(unittest.TestCase):
-    def test_requires_an_explicit_local_configuration(self):
-        with patch.dict(os.environ, {}, clear=True):
-            self.assertIsNone(from_environment())
-            self.assertEqual(from_environment(model_name="test-model").model, "test-model:latest")
-        with patch.dict(os.environ, {"AI_MVP_OLLAMA_MODEL": "environment-model"}, clear=True):
-            self.assertEqual(from_environment(model_name="cli-model").model, "cli-model:latest")
-        with self.assertRaises(ValueError):
-            OllamaModel("test-model", "https://ollama.com")
-        with self.assertRaises(ValueError):
-            OllamaModel("test-model:cloud")
-
-    def test_refuses_to_send_a_prompt_to_a_remote_alias(self):
-        tags = connection_returning({"models": [{
-            "model": "local-alias:latest", "remote_host": "https://ollama.com"
-        }]})
-        with patch("ai_mvp.models.HTTPConnection", return_value=tags):
-            with self.assertRaises(ModelUnavailable):
-                OllamaModel("local-alias").generate("system", "user")
-        tags.request.assert_called_once_with(
-            "GET", "/api/tags", body=None, headers={"Accept": "application/json"}
-        )
-
-    def test_sends_profile_and_message_as_separate_roles(self):
-        tags = connection_returning({"models": [{"model": "local-test:latest"}]})
-        reply = connection_returning({
-            "message": {"content": "<think>unused</think> 已按画像讲解。"}, "done": True
-        })
-        with patch("ai_mvp.models.HTTPConnection", side_effect=[tags, reply]):
-            result = OllamaModel("local-test").generate("画像", "用户问题")
-
-        self.assertEqual(result, "已按画像讲解。")
-        self.assertEqual(reply.request.call_args.args, ("POST", "/api/chat"))
-        body = json.loads(reply.request.call_args.kwargs["body"])
-        self.assertEqual(body["messages"], [
-            {"role": "system", "content": "画像"},
-            {"role": "user", "content": "用户问题"},
-        ])
-        self.assertFalse(body["stream"])
-
-    def test_rejects_redirects_without_opening_another_connection(self):
-        redirect = connection_returning({}, status=307)
-        with patch("ai_mvp.models.HTTPConnection", return_value=redirect) as connect:
-            with self.assertRaisesRegex(ModelUnavailable, "307"):
-                OllamaModel("local-test").generate("system", "user")
-        connect.assert_called_once_with("127.0.0.1", 11434, timeout=90.0)
-
-
 class RemoteModelTests(unittest.TestCase):
+    def test_session_model_requires_separate_boolean_account_sharing_consent(self):
+        base = {"provider": "deepseek", "api_key": "fake-key", "allow_billing": True}
+        for value in (None, "true", 1):
+            with self.subTest(value=value):
+                with self.assertRaises(ValueError):
+                    session_model({**base, "allow_account_sharing": value})
+        for value in (False, True):
+            with self.subTest(value=value):
+                provider, model = session_model({**base, "allow_account_sharing": value})
+                self.assertEqual((provider, model.provider), ("deepseek", "deepseek"))
+        with self.assertRaises(ValueError):
+            session_model({**base, "allow_billing": False, "allow_account_sharing": True})
+
     def test_session_providers_use_their_genuine_https_hosts_and_protocols(self):
         for provider, host, model_name in (
             ("deepseek", "api.deepseek.com", "deepseek-flash"),

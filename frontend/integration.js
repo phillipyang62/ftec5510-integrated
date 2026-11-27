@@ -899,88 +899,36 @@
     }
   });
 
-  const lesson = one("#guided-lesson");
-  const lessonTitle = one("#lesson-title");
-  const lessonFocus = one("#lesson-focus");
-  const lessonContent = one("#lesson-content");
-  const lessonAssets = one("#lesson-assets");
-  const lessonTrade = one("#lesson-trade");
-  const lessonRetry = one("#lesson-retry");
-  let lessonVersion = 0;
-
-  async function loadLesson() {
-    const version = ++lessonVersion;
-    lesson.hidden = false;
-    lessonFocus.hidden = lessonTrade.hidden = lessonRetry.hidden = true;
-    lessonAssets.hidden = true;
-    bilingual(lessonTitle, "对应投教", "Tailored lesson");
-    bilingual(lessonContent, "正在加载…", "Loading…");
-    try {
-      const data = await request("/api/education");
-      if (version !== lessonVersion) return;
-      bilingual(lessonTitle, data.title.zh, data.title.en);
-      bilingual(lessonContent, data.content.zh, data.content.en);
-      if (data.focus) {
-        const { label, score } = data.focus;
-        bilingual(lessonFocus, `${label.zh} · ${score} / 100`, `${label.en} · ${score} / 100`);
-        lessonFocus.hidden = false;
-      }
-      const examples = data.asset_examples ?? [];
-      lessonAssets.replaceChildren(...examples.map((product) => {
-        const example = node("li");
-        const needsOc = product.group === "stablecoin" && product.unmet?.includes("OC");
-        const basisZh = `${product.symbol} · ${product.basis.zh}`;
-        const basisEn = `${product.symbol} · ${product.basis.en}`;
-        bilingual(example, needsOc ? `${basisZh} ${product.reasons.zh}` : basisZh,
-          needsOc ? `${basisEn} ${product.reasons.en}` : basisEn);
-        return example;
-      }));
-      lessonAssets.hidden = examples.length === 0;
-      bilingual(lessonTrade, "打开模拟下单页", "Open simulated order page");
-      lessonTrade.hidden = false;
-      if (!one("#screen-assistant").hidden) lessonTitle.focus();
-    } catch (error) {
-      if (version !== lessonVersion) return;
-      if (error.code === "assessment_required") {
-        bilingual(lessonContent, "请先完成测评。", "Complete the assessment first.");
-        bilingual(lessonRetry, "打开风险问卷", "Open risk questionnaire");
-        lessonRetry.onclick = () => navigate("questionnaire");
-      } else {
-        bilingual(lessonContent, "暂时无法加载投教。", "Lesson unavailable.");
-        bilingual(lessonRetry, "重试加载投教", "Retry lesson");
-        lessonRetry.onclick = loadLesson;
-      }
-      lessonRetry.hidden = false;
-    }
-  }
-
-  lessonTrade.addEventListener("click", () => navigate("trade"));
-  document.addEventListener("harbor-education-requested", loadLesson);
-  document.addEventListener("harbor-assessment-updated", () => {
-    lessonVersion++;
-    lesson.hidden = true;
-  });
-
   const messages = one(".da-messages");
   const input = one("#assistant-input");
+  const holdingsQuestion = one("#holdings-chat-prompt");
+  const snapshotQuestion = one("#portfolio-snapshot-prompt");
   const send = one(".da-send");
   const newChat = one("#new-chat");
   const replyModel = one("#reply-model");
   const modelSettings = one("#model-settings");
   const modelProvider = one("#model-provider");
-  const ollamaModel = one("#ollama-model");
   const builtinProviders = [...modelProvider.options];
   const apiFields = one("#api-model-fields");
   const apiKey = one("#api-model-key");
   const apiAgree = one("#api-model-agree");
+  const apiSharing = one("#api-account-sharing");
   const modelStatus = one("#model-settings-status");
   const modelSave = one("#model-settings-save");
   const modelCancel = one("#model-settings-cancel");
   let modelLoad = 0;
   let apiProviders = new Map();
   let savedKeyProvider = null;
+  let startupApiModel = null;
   let history = [];
   input.maxLength = 2000;
+  bilingual(holdingsQuestion, "基于我目前的持仓和风险测评结果，你有什么建议？",
+    "Based on my current holdings and risk assessment, what would you suggest?");
+  bilingual(snapshotQuestion, "查看账户摘要与风险敞口", "View account summary and risk exposure");
+  holdingsQuestion.addEventListener("click", () =>
+    sendChat(holdingsQuestion.textContent, { action: "portfolio_advice", preserveDraft: true }));
+  snapshotQuestion.addEventListener("click", () =>
+    sendChat(snapshotQuestion.textContent, { action: "portfolio_snapshot", preserveDraft: true }));
   newChat.addEventListener("click", () => {
     messages.replaceChildren();
     history = [];
@@ -997,12 +945,9 @@
   document.addEventListener("harbor-language", localizeKeyPlaceholder);
 
   function refreshModelFields() {
-    const usingOllama = modelProvider.value === "ollama";
     const provider = apiProviders.get(modelProvider.value);
-    one("#ollama-fields").hidden = !usingOllama;
     apiFields.hidden = !provider;
-    ollamaModel.disabled = !usingOllama;
-    apiKey.disabled = apiAgree.disabled = !provider;
+    apiKey.disabled = apiAgree.disabled = apiSharing.disabled = !provider;
     const keepsKey = savedKeyProvider === modelProvider.value;
     apiKey.required = Boolean(provider && !keepsKey);
     apiAgree.required = Boolean(provider);
@@ -1010,37 +955,49 @@
     if (provider) {
       text(one("#api-key-label"), `${provider.name} API Key`);
       bilingual(one("#api-model-consent"),
-        `同意将对话与风险画像发送给 ${provider.name}，费用按该平台的 API 规则计算。`,
-        `I agree to send chat messages and my risk profile to ${provider.name} under its API billing terms.`);
-    }
-    modelSave.disabled = modelProvider.disabled || (usingOllama && !ollamaModel.value);
-    if (usingOllama && !ollamaModel.value) {
-      bilingual(modelStatus, "未找到本地模型。启动 Ollama、安装模型后重新打开设置。",
-        "No local models found. Start Ollama, install a model, then reopen settings.");
+        `同意将聊天消息与风险测评发送给 ${provider.name}。该平台的 API 按其规则单独计费，不包含在 ChatGPT 套餐内；我已确认费用与预算。`,
+        `I agree to send chat messages and my risk assessment to ${provider.name}. Its API is billed separately under its own terms, outside my ChatGPT plan; I have confirmed the cost and budget.`);
+      bilingual(one("#api-account-sharing-consent"),
+        `另行同意将模拟持仓的交易对、数量及相关测评分数发送给 ${provider.name}，用于生成持仓建议。`,
+        `I separately agree to send simulated holding pairs, quantities and relevant assessment scores to ${provider.name} for holdings guidance.`);
+      bilingual(modelStatus,
+        `${provider.name} · ${provider.model}。${apiSharing.checked ? "已勾选模拟持仓分享，保存后生效。" : "未授权模拟持仓分享。"}保存配置不会调用 API，实际调用状态将在聊天中显示。`,
+        `${provider.name} · ${provider.model}. ${apiSharing.checked ? "Simulated holdings sharing is selected and takes effect after saving." : "Simulated holdings sharing is not authorized."} Saving does not call the API; request status appears in chat.`);
+    } else if (startupApiModel) {
+      bilingual(modelStatus,
+        `启动 API · ${startupApiModel}。可用于普通聊天；持仓建议需选择 API 平台并单独授权分享。`,
+        `Startup API · ${startupApiModel}. Available for ordinary chat; select an API provider and authorize sharing separately for holdings guidance.`);
     } else {
-      text(modelStatus, "");
+      bilingual(modelStatus, "尚未配置启动 API。请选择 API 平台并保存设置。",
+        "No startup API is configured. Select an API provider and save its settings.");
     }
+    modelSave.disabled = modelProvider.disabled || (!provider && !startupApiModel);
   }
 
   one("#model-settings-open").addEventListener("click", async () => {
     const load = ++modelLoad;
     apiKey.value = "";
     apiAgree.checked = false;
+    apiSharing.checked = false;
     modelProvider.disabled = modelSave.disabled = true;
-    one("#ollama-fields").hidden = apiFields.hidden = true;
+    apiFields.hidden = true;
     bilingual(modelStatus, "正在读取模型设置…", "Loading model settings…");
     modelSettings.showModal();
     try {
       const data = await request("/api/model-settings");
       if (!modelSettings.open || load !== modelLoad) return;
       savedKeyProvider = data.settings.has_api_key ? data.settings.provider : null;
+      startupApiModel = data.startup?.remote ?? null;
       const previousCatalog = data.deepseek_model ? { deepseek: { name: "DeepSeek", model: data.deepseek_model } } : {};
       apiProviders = new Map(Object.entries(data.remote_providers ?? previousCatalog));
       modelProvider.replaceChildren(...builtinProviders, ...Array.from(apiProviders,
         ([id, provider]) => new Option(`${provider.name} API`, id)));
-      ollamaModel.replaceChildren(...data.ollama.models.map((model) => new Option(model, model)));
-      if (data.settings.provider === "ollama") ollamaModel.value = data.settings.model;
-      modelProvider.value = data.settings.provider;
+      builtinProviders.find((option) => option.value === "default").disabled = !startupApiModel;
+      const selected = apiProviders.has(data.settings.provider) ? data.settings.provider
+        : startupApiModel ? "default" : apiProviders.keys().next().value ?? "default";
+      modelProvider.value = selected;
+      apiSharing.checked = Boolean(selected === data.settings.provider && apiProviders.has(selected)
+        && data.settings.allow_account_sharing);
       modelProvider.disabled = false;
       refreshModelFields();
       modelProvider.focus();
@@ -1055,24 +1012,25 @@
   modelSettings.addEventListener("close", () => {
     apiKey.value = "";
     apiAgree.checked = false;
+    apiSharing.checked = false;
   });
   modelProvider.addEventListener("change", () => {
     apiKey.value = "";
     apiAgree.checked = false;
+    apiSharing.checked = false;
     refreshModelFields();
   });
-  ollamaModel.addEventListener("change", refreshModelFields);
+  apiSharing.addEventListener("change", refreshModelFields);
   one("#model-settings-form").addEventListener("submit", async (event) => {
     event.preventDefault();
     if (modelSave.disabled) return;
     const provider = modelProvider.value;
-    const settings = { provider };
-    if (provider === "ollama") settings.model = ollamaModel.value;
+    const settings = { provider, allow_account_sharing: apiProviders.has(provider) && apiSharing.checked };
     if (apiProviders.has(provider)) {
       settings.api_key = apiKey.value.trim();
       settings.allow_billing = apiAgree.checked;
     }
-    modelProvider.disabled = ollamaModel.disabled = apiKey.disabled = apiAgree.disabled = modelSave.disabled = true;
+    modelProvider.disabled = apiKey.disabled = apiAgree.disabled = apiSharing.disabled = modelSave.disabled = true;
     modelCancel.disabled = true;
     bilingual(modelStatus, "正在保存…", "Saving…");
     try {
@@ -1081,7 +1039,7 @@
     } catch (error) {
       modelProvider.disabled = false;
       refreshModelFields();
-      bilingual(modelStatus, "无法保存设置，请检查模型或 API Key。", "Could not save settings. Check the model or API key.");
+      bilingual(modelStatus, "无法保存设置，请检查 API 平台、Key 与授权选项。", "Could not save settings. Check the API provider, key and consent options.");
       if (error.code === "secure_model_service_required") {
         bilingual(modelStatus, "API Key 需要本机 AI 服务或 HTTPS。", "API keys require a local or HTTPS AI service.");
       }
@@ -1100,7 +1058,7 @@
     else bilingual(bubble, content.zh, content.en);
     entry.append(bubble);
     messages.append(entry);
-    entry.scrollIntoView({ block: "nearest" });
+    messages.scrollTop = messages.scrollHeight;
   }
 
   function marketQueries(message) {
@@ -1119,36 +1077,36 @@
     return [...new Set(selected)].slice(0, 5);
   }
 
-  one("#assistant-form").addEventListener("submit", async (event) => {
-    event.preventDefault();
-    const message = input.value.trim();
+  async function sendChat(message, { action, preserveDraft = false } = {}) {
     if (!message || send.disabled) return;
-    send.disabled = newChat.disabled = true;
+    send.disabled = newChat.disabled = holdingsQuestion.disabled = snapshotQuestion.disabled = true;
     replyModel.hidden = true;
     addMessage("user", message);
-    input.value = "";
+    if (!preserveDraft) input.value = "";
     try {
-      const data = await request("/api/assistant/chat", "POST", { message, history, market_queries: marketQueries(message) });
-      const generated = ["local_model", "remote_model"].includes(data.generation);
+      const payload = { message, history, market_queries: marketQueries(message) };
+      if (action) payload.action = action;
+      const data = await request("/api/assistant/chat", "POST", payload);
+      const generated = data.generation === "remote_model";
       if (data.reply) addMessage("ai", data.reply);
       if (data.model_status?.message && !generated) addMessage("ai", data.model_status.message);
-      if (data.generation === "local_model") {
-        text(replyModel, data.model_name ? `Ollama · ${data.model_name}` : "Ollama");
-      } else if (data.generation === "remote_model") {
+      if (data.generation === "remote_model") {
         text(replyModel, data.model_name ? `API · ${data.model_name}` : "API");
+      } else if (data.generation === "account_snapshot") {
+        bilingual(replyModel, "中台数据", "Middle-office data");
       } else if (data.generation === "model_not_configured") {
         bilingual(replyModel, "尚未配置模型", "Model setup required");
       } else if (data.generation === "model_unavailable") {
         bilingual(replyModel, "模型调用失败", "Model request failed");
       } else if (data.generation === "model_privacy_blocked") {
-        bilingual(replyModel, "账户数据仅本机处理", "Account data stays local");
+        bilingual(replyModel, "需要持仓分享授权", "Holdings sharing consent required");
       } else if (data.generation === "policy_guard") {
         bilingual(replyModel, "回复未通过核验", "Response verification failed");
       } else {
         bilingual(replyModel, "测评与数据规则", "Assessment and data rules");
       }
       replyModel.hidden = false;
-      if (!data.reply && !input.value) input.value = message;
+      if (!preserveDraft && !data.reply && !input.value) input.value = message;
       // Account facts stay out of the browser-provided history for later model calls.
       if (generated && !data.account) {
         history = [...history, { role: "user", content: message.slice(0, 800) },
@@ -1156,10 +1114,15 @@
       }
     } catch {
       addMessage("ai", {zh: "暂时无法发送消息，请重试。", en: "Could not send the message. Try again."});
-      input.value = message;
+      if (!preserveDraft && !input.value) input.value = message;
     } finally {
-      send.disabled = newChat.disabled = false;
+      send.disabled = newChat.disabled = holdingsQuestion.disabled = snapshotQuestion.disabled = false;
     }
+  }
+
+  one("#assistant-form").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    await sendChat(input.value.trim());
   });
 
   const accountNotice = notice(one(".da-holdings"), "account-status");

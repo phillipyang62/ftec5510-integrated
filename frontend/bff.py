@@ -137,7 +137,8 @@ class DemoSession:
     def public_model_settings(self):
         stored = self.model_settings or {"provider": "default", "model": None}
         return {"provider": stored["provider"], "model": stored["model"],
-                "has_api_key": bool(stored.get("api_key"))}
+                "has_api_key": bool(stored.get("api_key")),
+                "allow_account_sharing": stored.get("allow_account_sharing", False)}
 
 
 class Gateway:
@@ -221,21 +222,21 @@ class Gateway:
 
         provider = body.get("provider")
         candidate = {"provider": provider}
-        if provider == "ollama":
-            candidate["model"] = body.get("model")
-        elif provider != "default":
+        if provider != "default":
             if self.ai.connection is HTTPConnection and self.ai.host not in {"127.0.0.1", "::1", "localhost"}:
                 raise GatewayError(409, "secure_model_service_required", "API keys require a local or HTTPS AI service")
             current = session.model_settings or {}
             key = body.get("api_key")
             if key in (None, "") and current.get("provider") == provider:
                 key = current.get("api_key")
-            candidate.update(api_key=key, allow_billing=body.get("allow_billing"))
+            candidate.update(api_key=key, allow_billing=body.get("allow_billing"),
+                             allow_account_sharing=body.get("allow_account_sharing", False))
         status, selected = self.ai.request("PUT", "/v1/model-settings", candidate)
         if status != 200:
             return status, selected
-        if selected["provider"] not in ("default", "ollama"):
-            selected = {**selected, "api_key": candidate["api_key"].strip(), "allow_billing": True}
+        if selected["provider"] != "default":
+            selected = {**selected, "api_key": candidate["api_key"].strip(), "allow_billing": True,
+                        "allow_account_sharing": candidate["allow_account_sharing"]}
         session.model_settings = None if selected["provider"] == "default" else selected
         return 200, session.public_model_settings()
 
@@ -261,6 +262,10 @@ class Gateway:
         if path == "/api/model-settings" and method in {"GET", "PUT"}:
             return self._models(method, session, body)
         if path == "/api/assistant/chat" and method == "POST":
+            if body.get("action") == "portfolio_snapshot":
+                return self.ai.request(method, "/v1/chat", {
+                    "user_id": self.user_id, "message": body.get("message"), "action": "portfolio_snapshot",
+                })
             self._ensure_profile()
             settings = session.model_settings
             return self.ai.request(method, "/v1/chat",

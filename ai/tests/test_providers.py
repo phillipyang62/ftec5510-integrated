@@ -130,7 +130,46 @@ class HttpTradingProviderTests(unittest.TestCase):
         self.assertEqual(opener.call_args.args[0].full_url, "https://middleware.example/accounts/demo/analysis_snapshot")
         self.assertEqual(result["positions"], [{"symbol": "BTC/USDT", "quantity": "1.25"}])
         self.assertFalse(result["truncated"])
-        self.assertEqual(set(result), {"state", "as_of", "positions", "truncated"})
+        self.assertIs(result["simulated"], False)
+        self.assertEqual(set(result), {"state", "as_of", "positions", "truncated", "simulated"})
+
+    def test_only_the_snapshot_mode_marks_holdings_as_simulated(self):
+        provider = HttpTradingProvider("https://middleware.example", token="reader")
+        payload = {
+            "state": "ok", "as_of": "2026-11-09T08:00:00Z",
+            "portfolio": {"mode": "simulation", "positions": [{"symbol": "BTC/USDT", "quantity": "2"}]},
+        }
+        for mode, expected in (("simulation", True), ("live", False), (True, False), (None, False)):
+            with self.subTest(mode=mode), patch.object(
+                provider._opener, "open", return_value=BytesIO(json.dumps({**payload, "mode": mode}).encode()),
+            ):
+                self.assertIs(provider.holdings("demo")["simulated"], expected)
+
+    def test_partial_portfolio_exposure_uses_only_comparable_valued_positions(self):
+        provider = HttpTradingProvider("https://middleware.example", token="reader")
+        payload = {
+            "state": "partial", "as_of": "2026-11-09T08:00:00Z",
+            "portfolio": {
+                "state": "partial", "valuation_currency": "USDT", "total_assets": None,
+                "positions": [
+                    {"symbol": "BTC/USDT", "quantity": "2", "state": "valued", "market_value": "123.45"},
+                    {"symbol": "ETH/USDT", "quantity": "3", "state": "unvalued", "market_value": None},
+                    {"symbol": "SOL/HKD", "quantity": "4", "state": "valued", "market_value": "900"},
+                    {"symbol": "DOGE/USDT", "quantity": "0", "state": "valued", "market_value": "0"},
+                ],
+                "balances": [{"currency": "USDT", "available": "30"}],
+            },
+        }
+        with patch.object(provider._opener, "open", return_value=BytesIO(json.dumps(payload).encode())) as opener:
+            snapshot = provider.portfolio("demo")
+        opener.assert_called_once()
+        self.assertEqual(snapshot["state"], "partial")
+        self.assertEqual(snapshot["observed_gross_exposure"], "123.45")
+        self.assertIsNone(snapshot["gross_exposure"])
+        self.assertIsNone(snapshot["largest_position"])
+        self.assertEqual([row["symbol"] for row in snapshot["positions"]], ["BTC/USDT", "ETH/USDT", "SOL/HKD"])
+        self.assertIsNone(snapshot["positions"][1]["market_value"])
+        self.assertEqual(snapshot["positions"][2]["quote_currency"], "HKD")
 
     def test_preserves_upstream_truncation_and_rejects_invalid_flag(self):
         provider = HttpTradingProvider("https://middleware.example")

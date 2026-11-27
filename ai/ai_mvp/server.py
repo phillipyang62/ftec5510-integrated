@@ -107,7 +107,7 @@ class ApiHandler(BaseHTTPRequestHandler):
         url = urlsplit(self.path)
         method, path = self.command, url.path
         if (method, path) == ("GET", "/health"):
-            return 200, {"status": "ok", "model_configured": self.server.assistant.model is not None,
+            return 200, {"status": "ok", "model_configured": self.server.assistant.remote_model is not None,
                          "remote_model_configured": self.server.assistant.remote_model is not None,
                          "market_configured": self.server.assistant.market_provider is not None,
                          "trading_configured": self.server.assistant.trading is not None}
@@ -126,7 +126,7 @@ class ApiHandler(BaseHTTPRequestHandler):
             return 200, assistant.suitability(user_id)
         if path == "/v1/model-settings" and method in {"GET", "PUT"}:
             if method == "GET":
-                return 200, model_options(assistant.model, assistant.remote_model)
+                return 200, model_options(assistant.remote_model)
             if not token:
                 raise ApiError(403, "model_settings_unavailable", "Configure an AI service token for session models")
             provider, model = self._session_model(self._json_body())
@@ -174,16 +174,15 @@ class ApiHandler(BaseHTTPRequestHandler):
             payload = self._json_body()
             user_id = require_user_id(payload.get("user_id"))
             settings = payload.get("model_settings")
-            models = None
-            if settings is not None:
+            model = None
+            allow_account_sharing = False
+            if settings is not None and payload.get("action") != "portfolio_snapshot":
                 if not token:
                     raise ApiError(403, "model_settings_unavailable", "Configure an AI service token for session models")
-                provider, model = self._session_model(settings)
-                if provider == "ollama":
-                    models = (("local_model", model),)
-                elif model is not None:
-                    models = (("remote_model", model), ("local_model", assistant.model))
-            return 200, assistant.respond(user_id, payload, models=models)
+                _, model = self._session_model(settings)
+                allow_account_sharing = model is not None and settings.get("allow_account_sharing") is True
+            return 200, assistant.respond(user_id, payload, api_model=model,
+                                          allow_account_sharing=allow_account_sharing)
         raise ApiError(404, "not_found", "unknown endpoint")
 
     @staticmethod

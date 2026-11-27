@@ -677,7 +677,7 @@ class MiddleOffice:
                 metrics.append({"symbol": symbol, "rule": rule, "value": amount(value),
                                 "threshold": amount(threshold), "breached": value >= threshold})
             reasons = portfolio["reasons"] + (["account_truncated"] if snapshot["truncated"] else [])
-            report = {"schema_version": 1, "user_id": user, "as_of": iso(as_of),
+            report = {"schema_version": 1, "mode": "simulation", "user_id": user, "as_of": iso(as_of),
                       "state": "partial" if reasons else "ok", "reasons": reasons,
                       "account": snapshot, "portfolio": portfolio,
                       "risk": {"state": portfolio["state"], "position_metrics": metrics},

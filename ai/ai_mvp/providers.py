@@ -512,19 +512,75 @@ def _account_snapshot(payload: object) -> dict:
     }
 
 
-def _holdings_snapshot(payload: object) -> dict:
+def _analysis_portfolio(payload: object) -> dict:
     if not isinstance(payload, dict) or payload.get("state") not in ("ok", "partial"):
         raise ValueError("invalid analysis snapshot")
     portfolio = payload.get("portfolio")
     positions = portfolio.get("positions") if isinstance(portfolio, dict) else None
     if not isinstance(positions, list) or any(not isinstance(row, dict) for row in positions):
         raise ValueError("snapshot must contain portfolio positions")
-    held = [row for row in map(_position, positions) if Decimal(row["quantity"]) != 0]
+    return portfolio
+
+
+def _holdings_snapshot(payload: object) -> dict:
+    portfolio = _analysis_portfolio(payload)
+    held = [row for row in map(_position, portfolio["positions"]) if Decimal(row["quantity"]) != 0]
     return {
         "state": "ok",
         "as_of": _timestamp(payload.get("as_of")),
         "positions": held[:_MAX_ACCOUNT_ROWS],
+        "simulated": payload.get("mode") == "simulation",
         "truncated": len(held) > _MAX_ACCOUNT_ROWS,
+    }
+
+
+def _portfolio_snapshot(payload: object) -> dict:
+    portfolio = _analysis_portfolio(payload)
+    currency = _asset(portfolio.get("valuation_currency"))
+    positions = []
+    for raw in portfolio["positions"]:
+        row = _position(raw)
+        if Decimal(row["quantity"]) == 0:
+            continue
+        if "/" not in row["symbol"]:
+            raise ValueError("valuation requires a trading pair")
+        value = _decimal(raw.get("market_value"), "market_value") if raw.get("state") == "valued" else None
+        positions.append({**row, "market_value": value, "quote_currency": row["symbol"].split("/")[1]})
+
+    raw_balances = portfolio.get("balances")
+    if not isinstance(raw_balances, list) or any(not isinstance(row, dict) for row in raw_balances):
+        raise ValueError("snapshot must contain portfolio balances")
+    balances = [{"currency": _asset(row.get("currency")), "available": _decimal(row.get("available"), "available")}
+                for row in raw_balances[:_MAX_ACCOUNT_ROWS]]
+    comparable = [Decimal(row["market_value"]).copy_abs() for row in positions[:_MAX_ACCOUNT_ROWS]
+                  if row["market_value"] is not None and row["quote_currency"] == currency]
+    complete = (
+        payload["state"] == "ok" and portfolio.get("state") == "ok"
+        and len(positions) <= _MAX_ACCOUNT_ROWS and len(raw_balances) <= _MAX_ACCOUNT_ROWS
+        and len(comparable) == len(positions)
+    )
+    exposure = format(sum(comparable, Decimal(0)), "f") if comparable or not positions else None
+    largest_position = None
+    total_assets = None
+    if complete:
+        total_assets = _decimal(portfolio.get("total_assets"), "total_assets")
+        held = {row["symbol"] for row in positions}
+        concentrations = [
+            {"symbol": row["symbol"], "concentration_pct": _decimal(row.get("value"), "concentration")}
+            for row in payload.get("risk", {}).get("position_metrics", [])
+            if row.get("rule") == "concentration_pct" and row.get("symbol") in held
+        ]
+        largest_position = max(concentrations, key=lambda row: Decimal(row["concentration_pct"]), default=None)
+    return {
+        "state": "ok" if complete else "partial",
+        "as_of": _timestamp(payload.get("as_of")),
+        "valuation_currency": currency,
+        "positions": positions[:_MAX_ACCOUNT_ROWS],
+        "balances": balances,
+        "gross_exposure": exposure if complete else None,
+        "observed_gross_exposure": exposure,
+        "total_assets": total_assets,
+        "largest_position": largest_position,
     }
 
 
@@ -554,6 +610,9 @@ class HttpTradingProvider:
     def holdings(self, user_id: str) -> dict:
         return self._read_snapshot(user_id, "analysis_snapshot", _holdings_snapshot)
 
+    def portfolio(self, user_id: str) -> dict:
+        return self._read_snapshot(user_id, "analysis_snapshot", _portfolio_snapshot)
+
     def _read_snapshot(self, user_id, endpoint, normalize):
         if not isinstance(user_id, str) or not user_id.strip() or user_id in {".", ".."}:
             return {"state": "unavailable", "reason": "invalid_user_id"}
@@ -569,5 +628,5 @@ class HttpTradingProvider:
             return {"state": "unavailable", "reason": "invalid_response"}
         try:
             return normalize(json.loads(raw))
-        except (ValueError, RecursionError):
+        except (AttributeError, TypeError, ValueError, ArithmeticError, RecursionError):
             return {"state": "unavailable", "reason": "invalid_response"}
